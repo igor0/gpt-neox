@@ -252,7 +252,7 @@ class ParallelRelativePositionBias(torch.nn.Module):
         values = F.embedding(rp_bucket, self.weight, self.padding_idx,
                              self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse)
         bias = rearrange(values, 'i j h -> () h i j')
-        return bias
+        return bias * math.sqrt(self.heads)
 
 
 class ColumnParallelLinear(torch.nn.Module):
