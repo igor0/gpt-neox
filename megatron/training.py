@@ -260,6 +260,11 @@ def get_model(neox_args, inference=False, get_key_value=True):
             if not "soft_embedding" in name:
                 param.requires_grad = False
 
+    if neox_args.pythia_train_only is not None:
+        param_regex = re.compile(neox_args.pythia_train_only)
+        for name, param in model.named_parameters():
+            param.requires_grad = param_regex.search(name)
+
     if not neox_args.is_pipe_parallel:
         # Export PipeParallel model to nn.Sequential model to avoid the overhead of deepspeed's pipe parallel training
         model = model.to_sequential()

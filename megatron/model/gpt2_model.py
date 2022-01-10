@@ -195,8 +195,18 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
 
         self.specs.append(_pre_transformer_block)
 
+
         # Transformer layers
-        for i in range(self.neox_args.num_layers):
+        num_layers = self.neox_args.num_layers
+        if self.neox_args.pythia_num_layers is not None and self.neox_args.pythia_num_layers >= 0:
+            if self.neox_args.pythia_num_layers > num_layers:
+                raise ValueError(f'pythia_num_layers ({self.neox_args.pythia_num_layers}) must be <= num_layers ({num_layers})')
+
+            num_layers = min(num_layers, self.neox_args.pythia_num_layers)
+
+        print("XXX num_layers:", num_layers)
+
+        for i in range(num_layers):
             layer_type = self.neox_args.attention_config[i]
             if layer_type in ["gmlp", "amlp"]:
                 self.specs.append(
