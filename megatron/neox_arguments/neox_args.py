@@ -965,17 +965,12 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
     
 @dataclass
 class NeoXArgsPythia(NeoXArgsTemplate):
-    pythia_num_layers: int = -1
-    """
-    How many layers to limit the model to; the remaining layers will be dropped.
-    """
-
     pythia_train_only: str = None
     """
     Only parameters whose names match the provided regular expression will be trained; all other parameters will be frozen.
     """
 
-    pythia_project_output: bool = False
+    pythia_extra_linear: bool = False
     """
     Add a trainable dimXdim linear output projection before the unembedding transformation.
     """

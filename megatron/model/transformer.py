@@ -150,6 +150,16 @@ class ParallelLinear(nn.Module):
         super().__init__()
         parallelism = neox_args.output_layer_parallelism
         if parallelism == "column":
+            if neox_args.pythia_extra_linear:
+                self.extra_linear = mpu.ColumnParallelLinear(
+                    neox_args=neox_args,
+                    input_size=neox_args.hidden_size,
+                    output_size=neox_args.hidden_size,
+                    bias=False,
+                    init_method=init_method,
+                    gather_output=not parallel_output,
+                    skip_bias_add=False,
+                )
             self.final_linear = mpu.ColumnParallelLinear(
                 neox_args=neox_args,
                 input_size=neox_args.hidden_size,
@@ -160,6 +170,17 @@ class ParallelLinear(nn.Module):
                 skip_bias_add=False,
             )
         else:
+            if neox_args.pythia_extra_linear:
+                self.extra_linear = mpu.RowParallelLinear(
+                    neox_args=neox_args,
+                    input_size=neox_args.hidden_size,
+                    output_size=neox_args.hidden_size,
+                    bias=False,
+                    input_is_parallel=False,
+                    init_method=init_method,
+                    parallel_output=False if inference else parallel_output,
+                    skip_bias_add=False,
+                )
             self.final_linear = mpu.RowParallelLinear(
                 neox_args=neox_args,
                 input_size=neox_args.hidden_size,
@@ -172,6 +193,9 @@ class ParallelLinear(nn.Module):
             )
 
     def forward(self, hidden_states):
+        if hasattr(self, 'extra_linear'):
+            hidden_statess = self.extra_linear(hidden_states)
+
         return self.final_linear(hidden_states)
 
 
