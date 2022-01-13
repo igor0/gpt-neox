@@ -195,11 +195,8 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
 
         self.specs.append(_pre_transformer_block)
 
-
         # Transformer layers
-        num_layers = self.neox_args.num_layers
-
-        for i in range(num_layers):
+        for i in range(self.neox_args.num_layers):
             layer_type = self.neox_args.attention_config[i]
             if layer_type in ["gmlp", "amlp"]:
                 self.specs.append(
