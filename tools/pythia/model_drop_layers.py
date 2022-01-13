@@ -8,12 +8,12 @@ def get_layer_file_name_str(layer_id, model_id):
 
 def get_layer_file_name(layer_id, model_id):
     return get_layer_file_name_str("{:02d}".format(layer_id), "{:02d}".format(model_id))
-    
+
 class model_shrink:
     def __init__(self, orig_path, shrunk_path):
         self.orig_path = orig_path
         self.shrunk_path = shrunk_path
-        
+
         extra_layers = 5 # layers other than the regular transformer layers
         self.orig_layers = self.get_orig_layers() - extra_layers
 
