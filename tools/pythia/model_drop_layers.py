@@ -17,7 +17,7 @@ class model_shrink:
         self.shrunk_path_base = shrunk_path_base
 
         extra_layers = 5 # layers other than the regular transformer layers
-        self.orig_layers = self.get_orig_layers() - extra_layers
+        self.orig_layers = self.orig_layers_num() - extra_layers
 
         self.checkpoint_name = os.path.basename(self.checkpoint_path.rstrip(os.sep))
 
@@ -31,7 +31,7 @@ class model_shrink:
 
         self.fs_link(orig_layer_path, shrunk_layer_path)
 
-    def get_orig_layers(self):
+    def orig_layers_num(self):
         regex_str = get_layer_file_name_str(r'(\d\d)', r'(\d\d)')
         file_name_regex = re.compile(regex_str)
 
