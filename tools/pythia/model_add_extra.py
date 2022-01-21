@@ -140,7 +140,7 @@ class mutable_model:
     def modify_layer_checkpoint(self):
         name = get_layer_file_name(self.max_layer_id, self.model_id)
         layer_chkpt_path = os.path.join(self.checkpoint_path, name)
-        m = torch.load(layer_chkpt_path)
+        m = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
 
         final_linear = m["final_linear.weight"]
         dim = final_linear.shape[1]
@@ -155,13 +155,15 @@ class mutable_model:
 
         # Save the updated checkpoint
         torch.save(m, layer_chkpt_path)
+        del m
         return dim
 
     def modify_optimizer_checkpoint(self, dim):
         name = "mp_rank_00_model_states.pt"
         layer_chkpt_path = os.path.join(self.checkpoint_path, name)
-        checkpoint = torch.load(layer_chkpt_path)
-        checkpoint["optimizer"]["fp32_groups_flat"] = [torch.zeros(dim * dim, dtype=torch.float32)]
+        checkpoint = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
+        checkpoint["optimizer"]["fp32_groups_flat"] = []
+        #checkpoint["optimizer"] = None
         if 'args' in checkpoint and 'num_layers' in checkpoint['args']:
             checkpoint['args']['num_layers'] = self.new_layers_num
 
@@ -171,6 +173,7 @@ class mutable_model:
         # Save the updated checkpoint
         print("Saving {}".format(name))
         torch.save(checkpoint, layer_chkpt_path)
+        del checkpoint
 
 def main():
     orig_model_path = sys.argv[1]
