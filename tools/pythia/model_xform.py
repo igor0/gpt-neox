@@ -1,3 +1,4 @@
+import argparse
 import os
 import re
 import sys
@@ -28,12 +29,10 @@ def get_layer_file_name(layer_id, model_id):
 
 
 class model_transform:
-    def __init__(self, orig_model_path, orig_checkpoint, new_model_path, model_id):
-        self.orig_model_path = orig_model_path
-        self.orig_checkpoint = orig_checkpoint
-        self.orig_checkpoint_path = os.path.join(orig_model_path, orig_checkpoint)
-        self.new_model_path = new_model_path
-        self.model_id = model_id
+    def __init__(self, args):
+        self.args = args
+        self.orig_checkpoint_path = os.path.join(args.orig_model_path, args.orig_checkpoint)
+        self.model_id = 0
 
         self.inspect_checkpoint()
 
@@ -63,14 +62,14 @@ class model_transform:
 
         # Figure out the paths
 
-        new_checkpoint_path = os.path.join(self.new_model_path, baseline_checkpoint_name)
-        new_configs_path = os.path.join(self.new_model_path, configs_dir)
+        new_checkpoint_path = os.path.join(self.args.new_model_path, baseline_checkpoint_name)
+        new_configs_path = os.path.join(self.args.new_model_path, configs_dir)
         new_config_path = os.path.join(new_configs_path, config_file)
-        orig_config_path = os.path.join(self.orig_model_path, configs_dir, config_file)
+        orig_config_path = os.path.join(self.args.orig_model_path, configs_dir, config_file)
 
         # Create the directories
 
-        fs_mkdir(self.new_model_path)
+        fs_mkdir(self.args.new_model_path)
         fs_mkdir(new_checkpoint_path)
         fs_mkdir(new_configs_path)
 
@@ -79,13 +78,14 @@ class model_transform:
         with open(orig_config_path) as conf_file:
             conf = yaml.load(conf_file, Loader=yaml.FullLoader)
 
-        conf['load'] = self.new_model_path
-        conf['save'] = self.new_model_path
+        conf['load'] = self.args.new_model_path
+        conf['save'] = self.args.new_model_path
         conf['finetune'] = True
 
         # Other args that we need - may need to be reconfigured
-        conf['pythia_train_only'] = 'extra_linear'
-        conf['pythia_extra_linear'] =  True
+        conf['pythia_train_only'] = self.args.mode
+        if self.args.mode == 'extra_linear':
+            conf['pythia_extra_linear'] =  True
         conf['train-iters'] = 10000
         conf['lr-decay-iters'] = 10000
         conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
@@ -97,7 +97,7 @@ class model_transform:
 
         # Create the 'latest' file
 
-        new_latest_file_path = os.path.join(self.new_model_path, "latest")
+        new_latest_file_path = os.path.join(self.args.new_model_path, "latest")
         print("Writing to", new_latest_file_path)
         with open(new_latest_file_path, 'w') as fh:
             fh.write(baseline_checkpoint_name)
@@ -118,7 +118,7 @@ class model_transform:
         fs_link(orig_ms_path, new_ms_path)
 
 
-        return mutable_model(new_checkpoint_path, new_layers_num, self.max_layer_id, self.model_id)
+        return mutable_model(self.args, new_checkpoint_path, new_layers_num, self.max_layer_id, self.model_id)
 
     def create_link(self, orig_layer_id, new_layer_id, new_checkpoint_path):
         orig_name = get_layer_file_name(orig_layer_id, 0)
@@ -131,7 +131,8 @@ class model_transform:
 
 
 class mutable_model:
-    def __init__(self, checkpoint_path, new_layers_num, max_layer_id, model_id):
+    def __init__(self, args, checkpoint_path, new_layers_num, max_layer_id, model_id):
+        self.args = args
         self.checkpoint_path = checkpoint_path
         self.new_layers_num = new_layers_num
         self.max_layer_id = max_layer_id
@@ -145,16 +146,18 @@ class mutable_model:
         final_linear = m["final_linear.weight"]
         dim = final_linear.shape[1]
 
-        del m["final_linear.weight"]
-        m["extra_linear.weight"] = torch.eye(dim).float()
-        m["final_linear.weight"] = final_linear
+        if self.args.mode == "extra_linear":
+            del m["final_linear.weight"]
+            m["extra_linear.weight"] = torch.eye(dim).float()
+            m["final_linear.weight"] = final_linear
 
-        # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
-        fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")
-        print("Saving {}".format(layer_chkpt_path))
+            # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
+            fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")
+            print("Saving {}".format(layer_chkpt_path))
 
-        # Save the updated checkpoint
-        torch.save(m, layer_chkpt_path)
+            # Save the updated checkpoint
+            torch.save(m, layer_chkpt_path)
+
         del m
         return dim
 
@@ -176,12 +179,14 @@ class mutable_model:
         del checkpoint
 
 def main():
-    orig_model_path = sys.argv[1]
-    orig_checkpoint = sys.argv[2]
-    new_model_path = sys.argv[3]
-    model_id = 0
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear'],)
+    parser.add_argument("orig_model_path")
+    parser.add_argument("orig_checkpoint")
+    parser.add_argument("new_model_path")
+    args = parser.parse_args()
 
-    transform = model_transform(orig_model_path, orig_checkpoint, new_model_path, model_id)
+    transform = model_transform(args)
     mutable = transform.link_new_model(transform.orig_layers_num)
     dim = mutable.modify_layer_checkpoint()
     mutable.modify_optimizer_checkpoint(dim)
