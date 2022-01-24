@@ -83,7 +83,18 @@ class model_transform:
         conf['finetune'] = True
 
         # Other args that we need - may need to be reconfigured
-        conf['pythia_train_only'] = self.args.mode
+        if self.args.mode == 'final_norm':
+            # The final layer norm is in its own pre-final "layer"
+            #
+            # Example of a 1-layer model:
+            #   0.word_embeddings.weight False None
+            #   2.{input_layernorm,attention,post_attention,mlp}
+            #   4.norm
+            #   5.final_linear
+            conf['pythia_train_only'] = r'^{}\.norm'.format(self.max_layer_id - 1)
+        else:
+            conf['pythia_train_only'] = self.args.mode
+
         if self.args.mode == 'extra_linear':
             conf['pythia_extra_linear'] =  True
         conf['train-iters'] = 10000
@@ -180,7 +191,7 @@ class mutable_model:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear'],)
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm'],)
     parser.add_argument("orig_model_path")
     parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
