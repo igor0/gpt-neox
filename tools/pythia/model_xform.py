@@ -27,6 +27,8 @@ def get_layer_file_name_str(layer_id, model_id):
 def get_layer_file_name(layer_id, model_id):
     return get_layer_file_name_str("{:02d}".format(layer_id), "{:02d}".format(model_id))
 
+def enable_extra_linear(args):
+    return args.mode == 'extra_linear' or args.mode == 'out_linear_all'
 
 class model_transform:
     def __init__(self, args):
@@ -92,15 +94,22 @@ class model_transform:
             #   4.norm
             #   5.final_linear
             conf['pythia_train_only'] = r'^{}\.norm'.format(self.max_layer_id - 1)
+        elif self.args.mode == 'out_linear_all':
+            conf['pythia_train_only'] = r'attention\.dense|dense_4h_to_h|extra_linear'
         else:
             conf['pythia_train_only'] = self.args.mode
 
-        if self.args.mode == 'extra_linear':
+        if enable_extra_linear(self.args):
             conf['pythia_extra_linear'] =  True
-        conf['train-iters'] = 10000
-        conf['lr-decay-iters'] = 10000
+
+        train_iters = 10_000
+        conf['train-iters'] = train_iters
+        conf['lr-decay-iters'] = train_iters
         conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
         conf['zero_optimization']['stage'] = 0
+
+        if self.args.mode == 'final_linear':
+            conf['optimizer']['params']['lr'] = 0.00006
 
         print("Writing to", new_config_path)
         with open(new_config_path, 'w') as f:
@@ -157,7 +166,7 @@ class mutable_model:
         final_linear = m["final_linear.weight"]
         dim = final_linear.shape[1]
 
-        if self.args.mode == "extra_linear":
+        if enable_extra_linear(self.args):
             del m["final_linear.weight"]
             m["extra_linear.weight"] = torch.eye(dim).float()
             m["final_linear.weight"] = final_linear
@@ -176,8 +185,7 @@ class mutable_model:
         name = "mp_rank_00_model_states.pt"
         layer_chkpt_path = os.path.join(self.checkpoint_path, name)
         checkpoint = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
-        checkpoint["optimizer"]["fp32_groups_flat"] = []
-        #checkpoint["optimizer"] = None
+        #checkpoint["optimizer"]["fp32_groups_flat"] = []
         if 'args' in checkpoint and 'num_layers' in checkpoint['args']:
             checkpoint['args']['num_layers'] = self.new_layers_num
 
@@ -191,7 +199,7 @@ class mutable_model:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm'],)
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all'],)
     parser.add_argument("orig_model_path")
     parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
