@@ -96,6 +96,8 @@ class model_transform:
             conf['pythia_train_only'] = r'^{}\.norm'.format(self.max_layer_id - 1)
         elif self.args.mode == 'out_linear_all':
             conf['pythia_train_only'] = r'attention\.dense|dense_4h_to_h|extra_linear'
+        elif self.args.mode == 'all':
+            del conf['pythia_train_only']
         else:
             conf['pythia_train_only'] = self.args.mode
 
@@ -109,6 +111,9 @@ class model_transform:
         conf['zero_optimization']['stage'] = 0
 
         if self.args.mode == 'final_linear':
+            # Ultimately, different LRs seem to work for different depths here.
+            # For dense_small, I believe I used 6e-4 for depths 0..7 and 6e-5
+            # for depths 8..12.
             conf['optimizer']['params']['lr'] = 0.00006
 
         print("Writing to", new_config_path)
@@ -199,7 +204,7 @@ class mutable_model:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all'],)
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'all'])
     parser.add_argument("orig_model_path")
     parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
