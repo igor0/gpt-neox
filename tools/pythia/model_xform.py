@@ -96,7 +96,7 @@ class model_transform:
             conf['pythia_train_only'] = r'^{}\.norm'.format(self.max_layer_id - 1)
         elif self.args.mode == 'out_linear_all':
             conf['pythia_train_only'] = r'attention\.dense|dense_4h_to_h|extra_linear'
-        elif self.args.mode == 'all':
+        elif self.args.mode == 'all' or self.args.mode == 'all_100k':
             del conf['pythia_train_only']
         else:
             conf['pythia_train_only'] = self.args.mode
@@ -104,7 +104,11 @@ class model_transform:
         if enable_extra_linear(self.args):
             conf['pythia_extra_linear'] =  True
 
-        train_iters = 10_000
+        if self.args.mode == 'all_100k':
+            train_iters = 100_000
+        else:
+            train_iters = 10_000
+
         conf['train-iters'] = train_iters
         conf['lr-decay-iters'] = train_iters
         conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
@@ -204,7 +208,7 @@ class mutable_model:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'all'])
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'all', 'all_100k'])
     parser.add_argument("orig_model_path")
     parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
