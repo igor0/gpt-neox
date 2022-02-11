@@ -1,0 +1,9 @@
+{
+    "text_gen_type": "input-file",
+    "temperature": 0.4,
+    "top_k": 40,
+    "sample_input_file": "sampleinput.txt",
+    "sample_output_file": "sampleoutput.txt",
+    "num_samples": 1,
+    "maximum_tokens": 32,
+}
