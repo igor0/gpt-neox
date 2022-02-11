@@ -30,20 +30,18 @@ def get_layer_file_name(layer_id, model_id):
 def enable_extra_linear(args):
     return args.mode == 'extra_linear' or args.mode == 'out_linear_all'
 
-class model_transform:
-    def __init__(self, args):
-        self.args = args
-        self.orig_checkpoint_path = os.path.join(args.orig_model_path, args.orig_checkpoint)
+class model:
+    def __init__(self, checkpoint_path):
+        self.checkpoint_path = checkpoint_path
         self.model_id = 0
+        self._inspect_checkpoint()
 
-        self.inspect_checkpoint()
-
-    def inspect_checkpoint(self):
+    def _inspect_checkpoint(self):
         file_name_regex = re.compile(get_layer_file_name_str(r'(\d\d)', r'(\d\d)'))
 
         max_layer_id = -1
 
-        for x in os.listdir(self.orig_checkpoint_path):
+        for x in os.listdir(self.checkpoint_path):
             m = file_name_regex.match(x)
             if m is not None:
                 model_id = int(m[2])
@@ -55,7 +53,14 @@ class model_transform:
         self.max_layer_id = max_layer_id
 
         extra_layers = 5 # layers other than the regular transformer layers
-        self.orig_layers_num = (self.max_layer_id + 1) - extra_layers
+        self.layers_num = (self.max_layer_id + 1) - extra_layers
+
+class model_transform:
+    def __init__(self, args):
+        checkpoint_path = os.path.join(args.orig_model_path, args.orig_checkpoint)
+
+        self.args = args
+        self.orig = model(checkpoint_path)
 
     def link_new_model(self, new_layers_num):
         configs_dir = "configs"
@@ -133,27 +138,32 @@ class model_transform:
 
         # Create checkpoint links
 
-        self.create_link(0, 0, new_checkpoint_path)
+        self.create_link(self.orig, 0, 0, new_checkpoint_path)
 
         for i in range(new_layers_num):
-            self.create_link(i + 2, i + 2, new_checkpoint_path)
+            self.create_link(self.orig, i + 2, i + 2, new_checkpoint_path)
 
-        self.create_link(self.orig_layers_num + 3, new_layers_num + 3, new_checkpoint_path)
-        self.create_link(self.orig_layers_num + 4, new_layers_num + 4, new_checkpoint_path)
+        # Link the normalization layer
+        self.create_link(self.orig, self.orig.layers_num + 3, new_layers_num + 3, new_checkpoint_path)
 
+        # Link the final head layer
+        model_head = self.orig if self.args.head is None else model(self.args.head)
+        self.create_link(model_head, model_head.layers_num + 4, new_layers_num + 4, new_checkpoint_path)
+
+        # Link the model states
         ms_file = "mp_rank_00_model_states.pt"
-        orig_ms_path = os.path.join(self.orig_checkpoint_path, ms_file)
+        orig_ms_path = os.path.join(self.orig.checkpoint_path, ms_file)
         new_ms_path = os.path.join(new_checkpoint_path, ms_file)
         fs_link(orig_ms_path, new_ms_path)
 
+        return mutable_model(self.args, new_checkpoint_path, new_layers_num, new_layers_num + 4, self.orig.model_id)
 
-        return mutable_model(self.args, new_checkpoint_path, new_layers_num, self.max_layer_id, self.model_id)
-
-    def create_link(self, orig_layer_id, new_layer_id, new_checkpoint_path):
+    @staticmethod
+    def create_link(orig, orig_layer_id, new_layer_id, new_checkpoint_path):
         orig_name = get_layer_file_name(orig_layer_id, 0)
         new_name = get_layer_file_name(new_layer_id, 0)
 
-        orig_layer_path = os.path.join(self.orig_checkpoint_path, orig_name)
+        orig_layer_path = os.path.join(orig.checkpoint_path, orig_name)
         new_layer_path = os.path.join(new_checkpoint_path, new_name)
 
         fs_link(orig_layer_path, new_layer_path)
@@ -175,7 +185,8 @@ class mutable_model:
         final_linear = m["final_linear.weight"]
         dim = final_linear.shape[1]
 
-        if enable_extra_linear(self.args):
+        # If there is a newly added extra_linear head, initialize it to identity
+        if enable_extra_linear(self.args) and self.args.head is None:
             del m["final_linear.weight"]
             m["extra_linear.weight"] = torch.eye(dim).float()
             m["final_linear.weight"] = final_linear
@@ -209,13 +220,14 @@ class mutable_model:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'all', 'all_100k'])
+    parser.add_argument("--head", type=str)
     parser.add_argument("orig_model_path")
     parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
     args = parser.parse_args()
 
     transform = model_transform(args)
-    mutable = transform.link_new_model(transform.orig_layers_num)
+    mutable = transform.link_new_model(transform.orig.layers_num)
     dim = mutable.modify_layer_checkpoint()
     mutable.modify_optimizer_checkpoint(dim)
 
