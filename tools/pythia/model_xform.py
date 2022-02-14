@@ -60,7 +60,7 @@ class model_transform:
         checkpoint_path = os.path.join(args.orig_model_path, args.orig_checkpoint)
 
         self.args = args
-        self.orig = model(checkpoint_path)
+        self.orig = model(os.path.abspath(checkpoint_path))
 
     def link_new_model(self, new_layers_num):
         configs_dir = "configs"
@@ -124,6 +124,11 @@ class model_transform:
             # For dense_small, I believe I used 6e-4 for depths 0..7 and 6e-5
             # for depths 8..12.
             conf['optimizer']['params']['lr'] = 0.00006
+
+        if self.args.predict is not None:
+            conf['pythia_predict_special'] = self.args.predict
+            #if self.args.predict == 'sink':
+                #conf['optimizer']['params']['lr'] = 0.00006
 
         print("Writing to", new_config_path)
         with open(new_config_path, 'w') as f:
@@ -221,6 +226,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'all', 'all_100k'])
     parser.add_argument("--head", type=str)
+    parser.add_argument("--predict", type=str, choices=['self', 'abs', 'prev', 'sink'])
     parser.add_argument("orig_model_path")
     parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
