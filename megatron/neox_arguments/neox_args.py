@@ -976,3 +976,4 @@ class NeoXArgsPythia(NeoXArgsTemplate):
     """
 
     pythia_predict_self: bool = False
+    pythia_predict_special: str = None

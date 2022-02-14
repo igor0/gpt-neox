@@ -158,11 +158,19 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
 
     # Unpack.
     tokens_ = data_b["text"].long()
-    labels = tokens_[:, 1:].contiguous()
-    if neox_args.pythia_predict_self:
-        tokens = labels
+    tokens = tokens_[:, :-1].contiguous()
+    if neox_args.pythia_predict_special == "self":
+        labels = tokens
+    elif neox_args.pythia_predict_special == "abs":
+        labels = torch.arange(0, tokens.shape[1]).expand(tokens.shape[0], tokens.shape[1])
+    elif neox_args.pythia_predict_special == "sink":
+        tokens = tokens[:, :2]
+        labels = torch.arange(0, tokens.shape[1]).expand(tokens.shape[0], tokens.shape[1])
+    elif neox_args.pythia_predict_special == "prev":
+        tokens = tokens_[:, 1:].contiguous()
+        labels = tokens_[:, :-1].contiguous()
     else:
-        tokens = tokens_[:, :-1].contiguous()
+        labels = tokens_[:, 1:].contiguous()
 
     # Get the masks and position ids.
     attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(

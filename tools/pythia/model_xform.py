@@ -60,7 +60,7 @@ class model_transform:
         checkpoint_path = os.path.join(args.orig_model_path, args.orig_checkpoint)
 
         self.args = args
-        self.orig = model(os.path.abspath(checkpoint_path))
+        self.orig = model(checkpoint_path)
 
     def link_new_model(self, new_layers_num):
         configs_dir = "configs"
@@ -88,6 +88,7 @@ class model_transform:
         conf['load'] = self.args.new_model_path
         conf['save'] = self.args.new_model_path
         conf['finetune'] = True
+        conf['num-layers'] = new_layers_num
 
         # Other args that we need - may need to be reconfigured
         if self.args.mode == 'final_norm':
@@ -111,6 +112,8 @@ class model_transform:
 
         if self.args.mode == 'all_100k':
             train_iters = 100_000
+        elif self.args.predict == 'self':
+            train_iters = 2_000
         else:
             train_iters = 10_000
 
@@ -222,18 +225,27 @@ class mutable_model:
         torch.save(checkpoint, layer_chkpt_path)
         del checkpoint
 
+def canonicalize_args(args):
+    args.orig_model_path = os.path.abspath(args.orig_model_path)
+    args.new_model_path = os.path.abspath(args.new_model_path)
+    return args
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'all', 'all_100k'])
     parser.add_argument("--head", type=str)
     parser.add_argument("--predict", type=str, choices=['self', 'abs', 'prev', 'sink'])
+    parser.add_argument("--num_layers", type=int)
     parser.add_argument("orig_model_path")
     parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
-    args = parser.parse_args()
+
+    args = canonicalize_args(parser.parse_args())
 
     transform = model_transform(args)
-    mutable = transform.link_new_model(transform.orig.layers_num)
+
+    layers_num = args.num_layers if args.num_layers is not None else transform.orig.layers_num
+    mutable = transform.link_new_model(layers_num)
     dim = mutable.modify_layer_checkpoint()
     mutable.modify_optimizer_checkpoint(dim)
 
