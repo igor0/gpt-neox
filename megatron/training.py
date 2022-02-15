@@ -164,9 +164,9 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
     elif neox_args.pythia_predict_special == "abs":
         labels = torch.arange(0, tokens.shape[1]).expand(tokens.shape[0], tokens.shape[1])
     elif neox_args.pythia_predict_special == "abslog":
-        labels = torch.arange(1, tokens.shape[1]).log2().floor().expand(tokens.shape[0], tokens.shape[1])
+        labels = torch.arange(1, tokens.shape[1] + 1).log2().floor().expand(tokens.shape[0], tokens.shape[1]).long()
     elif neox_args.pythia_predict_special == "abssqrt":
-        labels = torch.arange(1, tokens.shape[1]).sqrt().floor().expand(tokens.shape[0], tokens.shape[1])
+        labels = torch.arange(1, tokens.shape[1] + 1).sqrt().floor().expand(tokens.shape[0], tokens.shape[1]).long()
     elif neox_args.pythia_predict_special == "sink":
         tokens = tokens[:, :2]
         labels = torch.arange(0, tokens.shape[1]).expand(tokens.shape[0], tokens.shape[1])

@@ -112,7 +112,7 @@ class model_transform:
 
         if self.args.mode == 'all_100k':
             train_iters = 100_000
-        elif self.args.predict == 'self':
+        elif self.args.predict is not None:
             train_iters = 2_000
         else:
             train_iters = 10_000
