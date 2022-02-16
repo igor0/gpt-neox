@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import argparse
 import os
 import re
@@ -31,10 +32,22 @@ def enable_extra_linear(args):
     return args.mode == 'extra_linear' or args.mode == 'out_linear_all'
 
 class model:
-    def __init__(self, checkpoint_path):
-        self.checkpoint_path = checkpoint_path
+    def __init__(self, model_path):
+        self.checkpoint_path = self._get_checkpoint_path(model_path)
         self.model_id = 0
         self._inspect_checkpoint()
+
+    def _get_checkpoint_path(self, model_path):
+        checkpoint_path = None
+        lastest_file_path = os.path.join(model_path, "latest")
+        try:
+            with open(lastest_file_path, "r") as f:
+                checkpoint_name = f.readline().strip()
+                checkpoint_path = os.path.join(model_path, checkpoint_name)
+        except FileNotFoundError:
+            raise FileNotFoundError("Could not find the latest checkpoint file in '{}'".format(model_path))
+
+        return checkpoint_path
 
     def _inspect_checkpoint(self):
         file_name_regex = re.compile(get_layer_file_name_str(r'(\d\d)', r'(\d\d)'))
@@ -57,10 +70,8 @@ class model:
 
 class model_transform:
     def __init__(self, args):
-        checkpoint_path = os.path.join(args.orig_model_path, args.orig_checkpoint)
-
         self.args = args
-        self.orig = model(checkpoint_path)
+        self.orig = model(args.orig_model_path)
 
     def link_new_model(self, new_layers_num):
         configs_dir = "configs"
@@ -230,6 +241,8 @@ class mutable_model:
 def canonicalize_args(args):
     args.orig_model_path = os.path.abspath(args.orig_model_path)
     args.new_model_path = os.path.abspath(args.new_model_path)
+    if args.head is not None:
+        args.head = os.path.abspath(args.head)
     return args
 
 def main():
@@ -239,7 +252,6 @@ def main():
     parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink'])
     parser.add_argument("--num_layers", type=int)
     parser.add_argument("orig_model_path")
-    parser.add_argument("orig_checkpoint")
     parser.add_argument("new_model_path")
 
     args = canonicalize_args(parser.parse_args())
