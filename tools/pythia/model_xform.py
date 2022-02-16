@@ -199,15 +199,15 @@ class mutable_model:
         self.model_id = model_id
 
     def modify_layer_checkpoint(self):
-        name = get_layer_file_name(self.max_layer_id, self.model_id)
-        layer_chkpt_path = os.path.join(self.checkpoint_path, name)
-        m = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
-
-        final_linear = m["final_linear.weight"]
-        dim = final_linear.shape[1]
-
         # If there is a newly added extra_linear head, initialize it to identity
         if enable_extra_linear(self.args) and self.args.head is None:
+            name = get_layer_file_name(self.max_layer_id, self.model_id)
+            layer_chkpt_path = os.path.join(self.checkpoint_path, name)
+            m = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
+
+            final_linear = m["final_linear.weight"]
+            dim = final_linear.shape[1]
+
             del m["final_linear.weight"]
             m["extra_linear.weight"] = torch.eye(dim).float()
             m["final_linear.weight"] = final_linear
@@ -218,11 +218,13 @@ class mutable_model:
 
             # Save the updated checkpoint
             torch.save(m, layer_chkpt_path)
+            del m
 
-        del m
-        return dim
+    def modify_optimizer_checkpoint(self):
+        if self.args.mode == "logit_lens":
+            # Nothing is needed for logit lens: we won't be training this model.
+            return
 
-    def modify_optimizer_checkpoint(self, dim):
         name = "mp_rank_00_model_states.pt"
         layer_chkpt_path = os.path.join(self.checkpoint_path, name)
         checkpoint = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
@@ -247,7 +249,7 @@ def canonicalize_args(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'in_linear_all', 'all', 'all_100k'])
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['logit_lens', 'extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'in_linear_all', 'all', 'all_100k'])
     parser.add_argument("--head", type=str)
     parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink'])
     parser.add_argument("--num_layers", type=int)
@@ -260,8 +262,8 @@ def main():
 
     layers_num = args.num_layers if args.num_layers is not None else transform.orig.layers_num
     mutable = transform.link_new_model(layers_num)
-    dim = mutable.modify_layer_checkpoint()
-    mutable.modify_optimizer_checkpoint(dim)
+    mutable.modify_layer_checkpoint()
+    mutable.modify_optimizer_checkpoint()
 
 if __name__ == "__main__":
     main()
