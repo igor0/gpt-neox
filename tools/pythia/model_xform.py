@@ -102,6 +102,8 @@ class model_transform:
             conf['pythia_train_only'] = r'^{}\.norm'.format(self.max_layer_id - 1)
         elif self.args.mode == 'out_linear_all':
             conf['pythia_train_only'] = r'attention\.dense|dense_4h_to_h|extra_linear'
+        elif self.args.mode == 'in_linear_all':
+            conf['pythia_train_only'] = r'attention\.query_key_value|mlp\.dense_h_to_4h'
         elif self.args.mode == 'all' or self.args.mode == 'all_100k':
             del conf['pythia_train_only']
         else:
@@ -232,7 +234,7 @@ def canonicalize_args(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'all', 'all_100k'])
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'in_linear_all', 'all', 'all_100k'])
     parser.add_argument("--head", type=str)
     parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink'])
     parser.add_argument("--num_layers", type=int)
