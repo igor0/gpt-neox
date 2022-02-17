@@ -90,6 +90,9 @@ def small_init_init_method(dim):
     return init_
 
 def wang_init_method(n_layers, dim):
+    if n_layers == 0:
+        n_layers = 1
+
     std = 2 / n_layers / math.sqrt(dim)
 
     def init_(tensor):
