@@ -28,13 +28,18 @@ def get_layer_file_name_str(layer_id, model_id):
 def get_layer_file_name(layer_id, model_id):
     return get_layer_file_name_str("{:02d}".format(layer_id), "{:02d}".format(model_id))
 
+def get_mstate_file_name_str(state_id):
+    return "mp_rank_{}_model_states.pt".format(state_id)
+
+def get_mstate_file_name(state_id):
+    return get_mstate_file_name_str("{:02d}".format(state_id))
+
 def enable_extra_linear(args):
     return args.mode == 'extra_linear' or args.mode == 'out_linear_all'
 
 class model:
     def __init__(self, model_path):
         self.checkpoint_path = self._get_checkpoint_path(model_path)
-        self.model_id = 0
         self._inspect_checkpoint()
 
     def _get_checkpoint_path(self, model_path):
@@ -50,20 +55,30 @@ class model:
         return checkpoint_path
 
     def _inspect_checkpoint(self):
-        file_name_regex = re.compile(get_layer_file_name_str(r'(\d\d)', r'(\d\d)'))
+        layer_name_regex = re.compile(get_layer_file_name_str(r'(\d\d)', r'(\d\d)'))
+        mstate_name_regex = re.compile(get_mstate_file_name_str(r'(\d\d)'))
 
         max_layer_id = -1
+        max_model_id = -1
+        max_mstate_id = -1
 
         for x in os.listdir(self.checkpoint_path):
-            m = file_name_regex.match(x)
+            m = layer_name_regex.match(x)
             if m is not None:
                 model_id = int(m[2])
                 layer_id = int(m[1])
 
-                if model_id == self.model_id:
-                    max_layer_id = max(max_layer_id, layer_id)
+                max_layer_id = max(max_layer_id, layer_id)
+                max_model_id = max(max_model_id, model_id)
+
+            m = mstate_name_regex.match(x)
+            if m is not None:
+                mstate_id = int(m[1])
+                max_mstate_id = max(max_mstate_id, mstate_id)
 
         self.max_layer_id = max_layer_id
+        self.max_model_id = max_model_id
+        self.max_mstate_id = max_mstate_id
 
         extra_layers = 5 # layers other than the regular transformer layers
         self.layers_num = (self.max_layer_id + 1) - extra_layers
@@ -159,44 +174,45 @@ class model_transform:
 
         # Create checkpoint links
 
-        self.create_link(self.orig, 0, 0, new_checkpoint_path)
+        self.link_layer(self.orig, 0, 0, new_checkpoint_path)
 
         for i in range(new_layers_num):
-            self.create_link(self.orig, i + 2, i + 2, new_checkpoint_path)
+            self.link_layer(self.orig, i + 2, i + 2, new_checkpoint_path)
 
         # Link the normalization layer
-        self.create_link(self.orig, self.orig.layers_num + 3, new_layers_num + 3, new_checkpoint_path)
+        self.link_layer(self.orig, self.orig.layers_num + 3, new_layers_num + 3, new_checkpoint_path)
 
         # Link the final head layer
         model_head = self.orig if self.args.head is None else model(self.args.head)
-        self.create_link(model_head, model_head.layers_num + 4, new_layers_num + 4, new_checkpoint_path)
+        self.link_layer(model_head, model_head.layers_num + 4, new_layers_num + 4, new_checkpoint_path)
 
         # Link the model states
-        ms_file = "mp_rank_00_model_states.pt"
-        orig_ms_path = os.path.join(self.orig.checkpoint_path, ms_file)
-        new_ms_path = os.path.join(new_checkpoint_path, ms_file)
-        fs_link(orig_ms_path, new_ms_path)
+        for mstate_id in range(self.orig.max_mstate_id + 1):
+            mstate_file = get_mstate_file_name(mstate_id)
+            orig_mstate_path = os.path.join(self.orig.checkpoint_path, mstate_file)
+            new_mstate_path = os.path.join(new_checkpoint_path, mstate_file)
+            fs_link(orig_mstate_path, new_mstate_path)
 
-        return mutable_model(self.args, new_checkpoint_path, new_layers_num, new_layers_num + 4, self.orig.model_id)
+        return mutable_model(self.args, new_checkpoint_path, new_layers_num, new_layers_num + 4, self.orig.max_model_id)
 
-    @staticmethod
-    def create_link(orig, orig_layer_id, new_layer_id, new_checkpoint_path):
-        orig_name = get_layer_file_name(orig_layer_id, 0)
-        new_name = get_layer_file_name(new_layer_id, 0)
+    def link_layer(self, orig, orig_layer_id, new_layer_id, new_checkpoint_path):
+        for model_id in range(self.orig.max_model_id + 1):
+            orig_name = get_layer_file_name(orig_layer_id, model_id)
+            new_name = get_layer_file_name(new_layer_id, model_id)
 
-        orig_layer_path = os.path.join(orig.checkpoint_path, orig_name)
-        new_layer_path = os.path.join(new_checkpoint_path, new_name)
+            orig_layer_path = os.path.join(orig.checkpoint_path, orig_name)
+            new_layer_path = os.path.join(new_checkpoint_path, new_name)
 
-        fs_link(orig_layer_path, new_layer_path)
+            fs_link(orig_layer_path, new_layer_path)
 
 
 class mutable_model:
-    def __init__(self, args, checkpoint_path, new_layers_num, max_layer_id, model_id):
+    def __init__(self, args, checkpoint_path, new_layers_num, max_layer_id, max_model_id):
         self.args = args
         self.checkpoint_path = checkpoint_path
         self.new_layers_num = new_layers_num
         self.max_layer_id = max_layer_id
-        self.model_id = model_id
+        self.max_model_id = max_model_id
 
     def modify_layer_checkpoint(self):
         # If there is a newly added extra_linear head, initialize it to identity
