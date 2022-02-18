@@ -156,8 +156,14 @@ class EvalHarnessAdapter(GPT2LM):
                 inps, contlens, inplens, padding_length = [], [], [], None
                 for _, context_enc, continuation_enc in chunk:
                     # when too long to fit in context, truncate from the left
+
+                    if self.neox_args.pythia_predict_special == "self":
+                        inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][1:]
+                    else:
+                        inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1]
+
                     inp = torch.tensor(
-                        (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1],
+                        inp_tokens,
                         dtype=torch.long,
                     ).to(self.device)
                     (inplen,) = inp.shape
