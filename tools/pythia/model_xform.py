@@ -193,7 +193,7 @@ class model_transform:
             new_mstate_path = os.path.join(new_checkpoint_path, mstate_file)
             fs_link(orig_mstate_path, new_mstate_path)
 
-        return mutable_model(self.args, new_checkpoint_path, new_layers_num, new_layers_num + 4, self.orig.max_model_id)
+        return mutable_model(self.args, new_checkpoint_path, new_layers_num, new_layers_num + 4, self.orig.max_model_id, self.orig.max_mstate_id)
 
     def link_layer(self, orig, orig_layer_id, new_layer_id, new_checkpoint_path):
         for model_id in range(self.orig.max_model_id + 1):
@@ -207,54 +207,64 @@ class model_transform:
 
 
 class mutable_model:
-    def __init__(self, args, checkpoint_path, new_layers_num, max_layer_id, max_model_id):
+    def __init__(self, args, checkpoint_path, new_layers_num, max_layer_id, max_model_id, max_mstate_id):
         self.args = args
         self.checkpoint_path = checkpoint_path
         self.new_layers_num = new_layers_num
         self.max_layer_id = max_layer_id
         self.max_model_id = max_model_id
+        self.max_mstate_id = max_mstate_id
 
     def modify_layer_checkpoint(self):
         # If there is a newly added extra_linear head, initialize it to identity
         if enable_extra_linear(self.args) and self.args.head is None:
-            name = get_layer_file_name(self.max_layer_id, self.model_id)
-            layer_chkpt_path = os.path.join(self.checkpoint_path, name)
-            m = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
+            model_parallelism = self.max_model_id + 1
+            for model_id in range(model_parallelism):
+                name = get_layer_file_name(self.max_layer_id, model_id)
+                layer_chkpt_path = os.path.join(self.checkpoint_path, name)
+                m = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
 
-            final_linear = m["final_linear.weight"]
-            dim = final_linear.shape[1]
+                # Calculate the dimensions of the extra_linear slice for this model partition
+                final_linear = m["final_linear.weight"]
+                dim = final_linear.shape[1]
+                assert dim % model_parallelism == 0
+                dim_slice_width = dim // model_parallelism
+                dim_slice1 = model_id * dim_slice_width
+                dim_slice2 = dim_slice1 + dim_slice_width
 
-            del m["final_linear.weight"]
-            m["extra_linear.weight"] = torch.eye(dim).float()
-            m["final_linear.weight"] = final_linear
+                # Add extra_linaer into the checkpoint
+                del m["final_linear.weight"]
+                m["extra_linear.weight"] = torch.eye(dim)[:,dim_slice1:dim_slice2].float()
+                m["final_linear.weight"] = final_linear
 
-            # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
-            fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")
-            print("Saving {}".format(layer_chkpt_path))
+                # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
+                fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")
+                print("Saving {}".format(layer_chkpt_path))
 
-            # Save the updated checkpoint
-            torch.save(m, layer_chkpt_path)
-            del m
+                # Save the updated checkpoint
+                torch.save(m, layer_chkpt_path)
+                del m
 
     def modify_optimizer_checkpoint(self):
         if self.args.mode == "logit_lens":
             # Nothing is needed for logit lens: we won't be training this model.
             return
 
-        name = "mp_rank_00_model_states.pt"
-        layer_chkpt_path = os.path.join(self.checkpoint_path, name)
-        checkpoint = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
-        #checkpoint["optimizer"]["fp32_groups_flat"] = []
-        if 'args' in checkpoint and 'num_layers' in checkpoint['args']:
-            checkpoint['args']['num_layers'] = self.new_layers_num
+        for mstate_id in range(self.max_mstate_id + 1):
+            name = get_mstate_file_name(mstate_id)
+            layer_chkpt_path = os.path.join(self.checkpoint_path, name)
+            checkpoint = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
+            #checkpoint["optimizer"]["fp32_groups_flat"] = []
+            if 'args' in checkpoint and 'num_layers' in checkpoint['args']:
+                checkpoint['args']['num_layers'] = self.new_layers_num
 
-        # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
-        fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")
+            # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
+            fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")
 
-        # Save the updated checkpoint
-        print("Saving {}".format(name))
-        torch.save(checkpoint, layer_chkpt_path)
-        del checkpoint
+            # Save the updated checkpoint
+            print("Saving {}".format(name))
+            torch.save(checkpoint, layer_chkpt_path)
+            del checkpoint
 
 def canonicalize_args(args):
     args.orig_model_path = os.path.abspath(args.orig_model_path)
