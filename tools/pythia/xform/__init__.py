@@ -161,6 +161,9 @@ class model_transform:
         conf['finetune'] = True
         conf['num-layers'] = new_layers_num
 
+        if self.args.masterport is not None:
+            conf['master_port'] = self.args.masterport + 29500
+
         # Other args that we need - may need to be reconfigured
         if self.args.mode == 'final_norm':
             # The final layer norm is in its own pre-final "layer"

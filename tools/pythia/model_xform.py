@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--head", type=str)
     parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink'])
     parser.add_argument("--num_layers", type=int)
+    parser.add_argument("--masterport", type=int)
     parser.add_argument("orig_model_path")
     parser.add_argument("new_model_path")
 
