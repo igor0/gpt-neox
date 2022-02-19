@@ -199,7 +199,7 @@ class model_transform:
         conf['train-iters'] = train_iters
         conf['lr-decay-iters'] = train_iters
         if 'tokenizer_type' in conf and conf['tokenizer_type'] == 'HFTokenizer':
-            conf['data-path'] = '/mnt/ssd-1/data/pile_20B_tokenizer/pile_20B_tokenizer_text_document'
+            conf['data-path'] = '/mnt/ssd-2/data/pile_20B_tokenizer/pile_20B_tokenizer_text_document'
         else:
             conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
 
