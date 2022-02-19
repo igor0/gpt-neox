@@ -156,11 +156,13 @@ class EvalHarnessAdapter(GPT2LM):
                 inps, contlens, inplens, padding_length = [], [], [], None
                 for _, context_enc, continuation_enc in chunk:
                     # when too long to fit in context, truncate from the left
-
-                    if self.neox_args.pythia_predict_special == "self":
-                        inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][1:]
-                    else:
+                    if self.neox_args.pythia_predict_special == None:
                         inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1]
+                    else:
+                        # self or prev
+                        # Note: prev and self are handled the same because the logits will already be
+                        # shifted appropriately. next required the adjustment shown above.
+                        inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][1:]
 
                     inp = torch.tensor(
                         inp_tokens,
