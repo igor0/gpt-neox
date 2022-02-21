@@ -198,7 +198,10 @@ class model_transform:
 
         conf['train-iters'] = train_iters
         conf['lr-decay-iters'] = train_iters
-        conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
+        if 'tokenizer_type' in conf and conf['tokenizer_type'] == 'HFTokenizer':
+            conf['data-path'] = '/mnt/ssd-1/data/pile_20B_tokenizer/pile_20B_tokenizer_text_document'
+        else:
+            conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
 
         if self.args.mode == 'final_linear':
             # Ultimately, different LRs seem to work for different depths here.
