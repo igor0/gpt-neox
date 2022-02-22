@@ -159,7 +159,9 @@ class EvalHarnessAdapter(GPT2LM):
                     if self.neox_args.pythia_predict_special == None:
                         inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1]
                     else:
-                        # self or prev
+                        # self or prev or abslog
+                        assert self.neox_args.pythia_predict_special in ["self", "prev", "abslog"]
+
                         # Note: prev and self are handled the same because the logits will already be
                         # shifted appropriately. next required the adjustment shown above.
                         inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][1:]
@@ -171,6 +173,8 @@ class EvalHarnessAdapter(GPT2LM):
                     (inplen,) = inp.shape
 
                     cont = continuation_enc
+                    if self.neox_args.pythia_predict_special == "abslog":
+                        cont = torch.arange(1, len(cont) + 1).log2().floor().long()
 
                     # since in _collate we make sure length is descending, the longest is always the first one.
                     padding_length = (
