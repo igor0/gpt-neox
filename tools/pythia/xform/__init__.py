@@ -1,8 +1,20 @@
+import math
 import os
 import re
 import shutil
 import torch
 import yaml
+
+
+def small_init_init_method(dim):
+    """Fills the input Tensor with values according to the method described in Transformers without Tears: Improving
+    the Normalization of Self-Attention - Nguyen, T. & Salazar, J. (2010), using a normal distribution."""
+    std = math.sqrt(2 / (5 * dim))
+
+    def init_(tensor):
+        return torch.nn.init.normal_(tensor, mean=0.0, std=std)
+
+    return init_
 
 def fs_link(src, dst):
     print("Linking '{}' <- '{}'".format(src, dst))
@@ -199,7 +211,7 @@ class model_transform:
         conf['train-iters'] = train_iters
         conf['lr-decay-iters'] = train_iters
         if 'tokenizer_type' in conf and conf['tokenizer_type'] == 'HFTokenizer':
-            conf['data-path'] = '/mnt/ssd-2/data/pile_20B_tokenizer/pile_20B_tokenizer_text_document'
+            conf['data-path'] = '/mnt/ssd-1/data/pile_20B_tokenizer/pile_20B_tokenizer_text_document'
         else:
             conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
 
@@ -251,6 +263,7 @@ class mutable_model:
     def modify_layer_checkpoint(self):
         # If there is a newly added extra_linear head, initialize it to identity
         if enable_extra_linear(self.args) and self.args.head is None:
+            extra_linear = None
             model_parallelism = self.max_model_id + 1
             for model_id in range(model_parallelism):
                 name = get_layer_file_name(self.max_layer_id, model_id)
@@ -265,9 +278,21 @@ class mutable_model:
                 dim_slice1 = model_id * dim_slice_width
                 dim_slice2 = dim_slice1 + dim_slice_width
 
+                if extra_linear == None:
+                    extra_linear = torch.eye(dim)
+                    if self.args.predict == "self":
+                        # Use the small_init initialization method for current-token prediction.
+                        # This didn't seem to be necessary for smaller models, but was needed
+                        # for the 20B model.
+                        #
+                        # Also, we'd likely need this for previous-token, but I didn't get to
+                        # that for the 20B model yet.
+                        small_init_init_method(dim)(extra_linear)
+
+
                 # Add extra_linaer into the checkpoint
                 del m["final_linear.weight"]
-                m["extra_linear.weight"] = torch.eye(dim)[:,dim_slice1:dim_slice2].float()
+                m["extra_linear.weight"] = extra_linear[:,dim_slice1:dim_slice2].float()
                 m["final_linear.weight"] = final_linear
 
                 # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
