@@ -21,4 +21,4 @@ if [ $# -gt 1 ]; then
     res_prefix="$res_prefix.global_step$2"
 fi
 
-./deepy.py trampoline.py -d "$model/configs" config.yml --eval_results_prefix "$res_prefix" $iter_arg --eval_tasks $eval_tasks
+./deepy.py evaluate.py -d "$model/configs" config.yml --eval_results_prefix "$res_prefix" $iter_arg --eval_tasks $eval_tasks
