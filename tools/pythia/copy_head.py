@@ -15,6 +15,7 @@ def canonicalize_args(args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="extra_linear", choices=['logit_lens', 'extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'in_linear_all', 'all', 'all_100k'])
+    parser.add_argument("--extra_linear_only", action='store_true')
     parser.add_argument("orig_model_path")
     parser.add_argument("new_model_path")
 
