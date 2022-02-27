@@ -144,7 +144,10 @@ class model_transform:
         self._write_latest_file()
 
         # Copy the head
-        self._link_layer(self.orig, self.orig.layers_num + 4, self.orig.layers_num + 4, new_checkpoint_path, copy=True)
+        if args.extra_linear_only:
+            self._copy_extra_linear(self.orig, self.orig.layers_num + 4, self.orig.layers_num + 4, new_checkpoint_path)
+        else:
+            self._link_layer(self.orig, self.orig.layers_num + 4, self.orig.layers_num + 4, new_checkpoint_path, copy=True)
 
     def _create_dirs(self):
         configs_dir = "configs"
@@ -242,6 +245,24 @@ class model_transform:
                 fs_copy(orig_layer_path, new_layer_path)
             else:
                 fs_link(orig_layer_path, new_layer_path)
+
+    def _copy_extra_linear(self, orig, orig_layer_id, new_layer_id, new_checkpoint_path):
+        for model_id in range(self.orig.max_model_id + 1):
+            orig_name = get_layer_file_name(orig_layer_id, model_id)
+            new_name = get_layer_file_name(new_layer_id, model_id)
+
+            orig_layer_path = os.path.join(orig.checkpoint_path, orig_name)
+            new_layer_path = os.path.join(new_checkpoint_path, new_name)
+
+            ch = torch.load(orig_layer_path)
+            keys_to_remove = []
+            for k in ch.keys():
+                if not k.startswith("extra_linear"):
+                    keys_to_remove.append(k)
+            for k in keys_to_remove:
+                del ch[k]
+            torch.save(ch, new_layer_path)
+
 
     def _write_latest_file(self):
         new_latest_file_path = os.path.join(self.args.new_model_path, "latest")
