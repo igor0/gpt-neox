@@ -301,13 +301,10 @@ class mutable_model:
 
                 if extra_linear == None:
                     extra_linear = torch.eye(dim)
-                    if self.args.predict == "self":
-                        # Use the small_init initialization method for current-token prediction.
-                        # This didn't seem to be necessary for smaller models, but was needed
-                        # for the 20B model.
-                        #
-                        # Also, we'd likely need this for previous-token, but I didn't get to
-                        # that for the 20B model yet.
+                    if self.args.predict is not None:
+                        # Use the small_init initialization method for predictions other than
+                        # next-token. This didn't seem to be necessary for smaller models, but was
+                        # needed for the 20B model.
                         small_init_init_method(dim)(extra_linear)
 
 
