@@ -137,14 +137,14 @@ class model_transform:
         # Create the directory for the new head
         orig_config_path, new_config_path, new_checkpoint_path = self._create_dirs()
 
-        # Read, modify and write the config file, so that we have it preserved with the head
-        self._modify_config(orig_config_path, new_config_path, self.orig.layers_num)
+        # Copy the config file, so that we have it preserved with the head
+        fs_copy(orig_config_path, new_config_path)
 
         # Write the 'latest' file for the transformed model
         self._write_latest_file()
 
         # Copy the head
-        if args.extra_linear_only:
+        if self.args.extra_linear_only:
             self._copy_extra_linear(self.orig, self.orig.layers_num + 4, self.orig.layers_num + 4, new_checkpoint_path)
         else:
             self._link_layer(self.orig, self.orig.layers_num + 4, self.orig.layers_num + 4, new_checkpoint_path, copy=True)
@@ -203,8 +203,6 @@ class model_transform:
 
         if self.args.mode == 'all_100k':
             train_iters = 100_000
-        elif self.args.predict is not None:
-            train_iters = 2_000
         else:
             train_iters = 10_000
 
@@ -217,12 +215,20 @@ class model_transform:
             conf['data-path'] = '/mnt/ssd-1/data/pile_20B_tokenizer/pile_20B_tokenizer_text_document'
         else:
             conf['data-path'] = '/mnt/ssd-1/data/pile_00/pile_00_text_document'
+        if self.args.seed is not None:
+            conf['seed'] = self.args.seed
+        if self.args.num_gpus is not None:
+            conf['num_gpus'] = self.args.num_gpus
 
         if self.args.mode == 'final_linear':
             # Ultimately, different LRs seem to work for different depths here.
             # For dense_small, I believe I used 6e-4 for depths 0..7 and 6e-5
             # for depths 8..12.
             conf['optimizer']['params']['lr'] = 0.00006
+
+        if self.args.lr is not None:
+            conf['optimizer']['params']['lr'] = self.args.lr
+            conf['min_lr'] = self.args.lr / 10.0
 
         if self.args.predict is not None:
             conf['pythia_predict_special'] = self.args.predict
@@ -301,7 +307,7 @@ class mutable_model:
 
                 if extra_linear == None:
                     extra_linear = torch.eye(dim)
-                    if self.args.predict is not None:
+                    if self.args.predict is not None or self.args.random_init == True:
                         # Use the small_init initialization method for predictions other than
                         # next-token. This didn't seem to be necessary for smaller models, but was
                         # needed for the 20B model.

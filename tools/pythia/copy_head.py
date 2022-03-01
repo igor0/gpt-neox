@@ -7,9 +7,6 @@ import xform
 def canonicalize_args(args):
     args.orig_model_path = os.path.abspath(args.orig_model_path)
     args.new_model_path = os.path.abspath(args.new_model_path)
-    args.predict = None
-    args.head = None
-    args.masterport = None
     return args
 
 def main():
