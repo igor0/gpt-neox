@@ -18,6 +18,10 @@ def main():
     parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink'])
     parser.add_argument("--num_layers", type=int)
     parser.add_argument("--masterport", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--num_gpus", type=int)
+    parser.add_argument("--lr", type=float)
+    parser.add_argument("--random_init", action='store_true')
     parser.add_argument("orig_model_path")
     parser.add_argument("new_model_path")
 
