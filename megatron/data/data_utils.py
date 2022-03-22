@@ -145,6 +145,12 @@ def get_normalized_weights_and_num_samples(weights: List[float], num_samples: in
         weighted_num_samples.append(int(math.ceil(num_samples * weight * 1.005)))
     return weights, weighted_num_samples
 
+def get_seq_len(args):
+    seq_length = args.seq_length
+    if args.pythia_predict_special in ["next2", "prev2"]:
+        seq_length = seq_length + 1
+    return seq_length
+
 def build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights, build_index_mappings=True):
     # build individual datasets
     train_datasets, valid_datasets, test_datasets = [], [], []
@@ -155,7 +161,7 @@ def build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, tes
                                 name=f'train_{i}',
                                 data_impl=neox_args.data_impl,
                                 num_samples=train_num_samples[i],
-                                seq_length=neox_args.seq_length,
+                                seq_length=get_seq_len(neox_args),
                                 seed=neox_args.seed,
                                 skip_warmup=(not neox_args.mmap_warmup),
                                 build_index_mappings=build_index_mappings
@@ -167,7 +173,7 @@ def build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, tes
                                 name=f'valid_{i}',
                                 data_impl=neox_args.data_impl,
                                 num_samples=valid_num_samples[i],
-                                seq_length=neox_args.seq_length,
+                                seq_length=get_seq_len(neox_args),
                                 seed=neox_args.seed,
                                 skip_warmup=(not neox_args.mmap_warmup),
                                 build_index_mappings=build_index_mappings
@@ -179,7 +185,7 @@ def build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, tes
                                 name=f'test_{i}',
                                 data_impl=neox_args.data_impl,
                                 num_samples=test_num_samples[i],
-                                seq_length=neox_args.seq_length,
+                                seq_length=get_seq_len(neox_args),
                                 seed=neox_args.seed,
                                 skip_warmup=(not neox_args.mmap_warmup),
                                 build_index_mappings=build_index_mappings
@@ -289,7 +295,7 @@ def build_train_valid_test_data_iterators(neox_args):
                 data_impl=neox_args.data_impl,
                 splits_string=neox_args.split,
                 train_valid_test_num_samples=train_val_test_num_samples,
-                seq_length=neox_args.seq_length,
+                seq_length=get_seq_len(neox_args),
                 seed=neox_args.seed,
                 skip_warmup=(not neox_args.mmap_warmup)
             )

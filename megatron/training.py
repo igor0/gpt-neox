@@ -173,6 +173,12 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
     elif neox_args.pythia_predict_special == "prev":
         tokens = tokens_[:, 1:].contiguous()
         labels = tokens_[:, :-1].contiguous()
+    elif neox_args.pythia_predict_special == "next2":
+        tokens = tokens_[:, :-2].contiguous()
+        labels = tokens_[:, 2:].contiguous()
+    elif neox_args.pythia_predict_special == "prev2":
+        tokens = tokens_[:, 2:].contiguous()
+        labels = tokens_[:, :-2].contiguous()
     else:
         labels = tokens_[:, 1:].contiguous()
 
