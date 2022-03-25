@@ -52,6 +52,9 @@ class EvalHarnessAdapter(GPT2LM):
         self.max_length = neox_args.max_position_embeddings // 2
         self.max_gen_toks = 128
 
+        if self.neox_args.pythia_predict_special in ["next2", "prev2"]:
+            self.max_length += 1
+
         # parallelism args:
         self.is_main = neox_args.rank == 0
         self.is_local_main = neox_args.local_rank == 0
@@ -158,9 +161,14 @@ class EvalHarnessAdapter(GPT2LM):
                     # when too long to fit in context, truncate from the left
                     if self.neox_args.pythia_predict_special == None:
                         inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1]
+                    elif self.neox_args.pythia_predict_special == "next":
+                        inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1]
+                    elif self.neox_args.pythia_predict_special == "next2":
+                        # here, max_length is already +1 (see __init__)
+                        inp_tokens = (context_enc + continuation_enc)[-(self.max_length + 1) :][:-1]
                     else:
-                        # self or prev or abslog
-                        assert self.neox_args.pythia_predict_special in ["self", "prev", "abslog"]
+                        # self or prev or or prev2 abslog
+                        assert self.neox_args.pythia_predict_special in ["self", "prev", "prev2", "abslog"]
 
                         # Note: prev and self are handled the same because the logits will already be
                         # shifted appropriately. next required the adjustment shown above.
@@ -215,6 +223,11 @@ class EvalHarnessAdapter(GPT2LM):
                             .unsqueeze(0)
                             .to(multi_logits.device)
                         )
+
+                        if self.neox_args.pythia_predict_special == "next2":
+                            cont_toks = cont_toks[:,1:]
+                        elif self.neox_args.pythia_predict_special == "prev2":
+                            cont_toks = cont_toks[:,:-1]
                         max_equal = (greedy_tokens == cont_toks).all()
                         logits = torch.gather(
                             logits, 2, cont_toks.unsqueeze(-1)
