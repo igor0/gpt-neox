@@ -29,7 +29,7 @@ from megatron import mpu, print_rank_0
 class GPT2Dataset(torch.utils.data.Dataset):
 
     def __init__(self, name, data_prefix, documents, indexed_dataset,
-                 num_samples, seq_length, seed, build_index_mappings=True):
+                 num_samples, seq_length, seed, build_index_mappings=True, shuffle=True):
 
         self.name = name
         self.indexed_dataset = indexed_dataset
@@ -48,6 +48,9 @@ class GPT2Dataset(torch.utils.data.Dataset):
 
             if self.shuffle_idx_len != self.sample_idx_len:
                 print(f'WARNING: shuffle index length ({self.shuffle_idx_len}) is not equal to sample index length ({self.sample_idx_len})')
+
+        if not shuffle:
+            self.shuffle_idx = np.arange(len(self.shuffle_idx))
 
     def __len__(self):
         return min(self.shuffle_idx_len, self.sample_idx_len)
@@ -111,7 +114,8 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
     shuffle_idx_filename = _filename + '_shuffle_idx.npy'
 
     # Build the indexed mapping if not exist.
-    if torch.distributed.get_rank() == 0:
+    #if torch.distributed.get_rank() == 0:
+    if True:
         if (not os.path.isfile(doc_idx_filename)) or \
                 (not os.path.isfile(sample_idx_filename)) or \
                 (not os.path.isfile(shuffle_idx_filename)):
@@ -149,9 +153,9 @@ def _build_index_mappings(name, data_prefix, documents, sizes,
     # device_index=rank which is not the case for model
     # parallel case
     counts = torch.cuda.LongTensor([1])
-    torch.distributed.all_reduce(counts, group=mpu.get_io_parallel_group())
-    assert counts[0].item() == torch.distributed.get_world_size(
-        group=mpu.get_io_parallel_group())
+    #torch.distributed.all_reduce(counts, group=mpu.get_io_parallel_group())
+    #assert counts[0].item() == torch.distributed.get_world_size(
+        #group=mpu.get_io_parallel_group())
 
     # Load mappings.
     start_time = time.time()

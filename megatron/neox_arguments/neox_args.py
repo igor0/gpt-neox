@@ -668,6 +668,8 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     Should be a list the same length as `test_data_paths`
     """
 
+    shuffle_data: bool = True
+
     weight_by_num_documents: bool = False
     """
     If True, Builds dataset weights from a multinomial distribution over groups of data according to the number of

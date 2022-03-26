@@ -61,7 +61,8 @@ def build_the_dataset(data_prefix, name, data_impl,
 
 def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     train_valid_test_num_samples,
-                                    seq_length, seed, skip_warmup):
+                                    seq_length, seed, skip_warmup,
+                                    shuffle):
     """Build train, valid, and test datasets."""
 
     # Indexed dataset.
@@ -94,7 +95,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             dataset = GPT2Dataset(name, data_prefix,
                                   documents, indexed_dataset,
                                   train_valid_test_num_samples[index],
-                                  seq_length, seed)
+                                  seq_length, seed, build_index_mappings=True,
+                                  shuffle=shuffle)
         return dataset
 
     train_dataset = build_dataset(0, 'train')
@@ -291,7 +293,8 @@ def build_train_valid_test_data_iterators(neox_args):
                 train_valid_test_num_samples=train_val_test_num_samples,
                 seq_length=neox_args.seq_length,
                 seed=neox_args.seed,
-                skip_warmup=(not neox_args.mmap_warmup)
+                skip_warmup=(not neox_args.mmap_warmup),
+                shuffle=neox_args.shuffle_data,
             )
 
         # Build dataloders.
