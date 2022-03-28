@@ -599,6 +599,17 @@ def train(
     # get noise scale logger (if neox_args.log_gradient_noise_scale is True)
     noise_scale_logger = get_noise_scale_logger(neox_args)
 
+    evaluate_and_print_results(
+        neox_args=neox_args,
+        prefix="initial eval",
+        forward_step_func=forward_step,
+        data_iterator=valid_data_iterator,
+        model=model,
+        iteration=iteration,
+        verbose=False,
+        timers=timers,
+    )
+
     # to monitor if we've skipped many iterations in a row and trigger an early exit
     overflow_monitor = OverflowMonitor(optimizer)
     while iteration < neox_args.train_iters:

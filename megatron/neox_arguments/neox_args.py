@@ -975,5 +975,10 @@ class NeoXArgsPythia(NeoXArgsTemplate):
     Add a trainable dimXdim linear output projection before the unembedding transformation.
     """
 
+    pythia_pre_extra_linear: bool = False
+    """
+    Add a trainable dimXdim linear output projection after the embedding transformation.
+    """
+
     pythia_predict_self: bool = False
     pythia_predict_special: str = None

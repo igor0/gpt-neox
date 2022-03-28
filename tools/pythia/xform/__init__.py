@@ -47,6 +47,9 @@ def get_mstate_file_name(state_id):
 def enable_extra_linear(args):
     return args.mode == 'extra_linear' or args.mode == 'out_linear_all'
 
+def enable_pre_extra_linear(args):
+    return args.mode == 'pre_extra_linear'
+
 class model:
     def __init__(self, model_path):
         self.checkpoint_path = self._get_checkpoint_path(model_path)
@@ -115,7 +118,11 @@ class model_transform:
         self._link_layer(self.orig, 0, 0, new_checkpoint_path)
 
         for i in range(new_layers_num):
-            self._link_layer(self.orig, i + 2, i + 2, new_checkpoint_path)
+            orig_i = i + 2
+            if self.args.mode == "pre_logit_lens" or self.args.mode == "pre_extra_linear":
+                orig_i = orig_i + self.orig.layers_num - new_layers_num
+
+            self._link_layer(self.orig, orig_i, i + 2, new_checkpoint_path)
 
         # Link the normalization layer
         self._link_layer(self.orig, self.orig.layers_num + 3, new_layers_num + 3, new_checkpoint_path)
@@ -194,12 +201,15 @@ class model_transform:
         elif self.args.mode == 'in_linear_all':
             conf['pythia_train_only'] = r'attention\.query_key_value|mlp\.dense_h_to_4h'
         elif self.args.mode == 'all' or self.args.mode == 'all_100k':
-            del conf['pythia_train_only']
+            if 'pythia_train_only' in conf:
+                del conf['pythia_train_only']
         else:
             conf['pythia_train_only'] = self.args.mode
 
         if enable_extra_linear(self.args):
             conf['pythia_extra_linear'] =  True
+        if enable_pre_extra_linear(self.args):
+            conf['pythia_pre_extra_linear'] =  True
 
         if self.args.mode == 'all_100k':
             train_iters = 100_000
@@ -327,11 +337,39 @@ class mutable_model:
                 torch.save(m, layer_chkpt_path)
                 del m
 
-    def modify_optimizer_checkpoint(self):
-        if self.args.mode == "logit_lens":
-            # Nothing is needed for logit lens: we won't be training this model.
-            return
+        if enable_pre_extra_linear(self.args) and self.args.head is None:
+            pre_extra_linear = None
+            model_parallelism = self.max_model_id + 1
+            for model_id in range(model_parallelism):
+                name = get_layer_file_name(0, model_id)
+                layer_chkpt_path = os.path.join(self.checkpoint_path, name)
+                m = torch.load(layer_chkpt_path, map_location=torch.device('cpu'))
 
+                # Calculate the dimensions of the extra_linear slice for this model partition
+                word_embeddings = m["word_embeddings.weight"]
+                dim = word_embeddings.shape[1]
+                assert dim % model_parallelism == 0
+                dim_slice_width = dim // model_parallelism
+                dim_slice1 = model_id * dim_slice_width
+                dim_slice2 = dim_slice1 + dim_slice_width
+
+                if pre_extra_linear == None:
+                    pre_extra_linear = torch.eye(dim)
+                    small_init_init_method(dim)(pre_extra_linear)
+
+
+                # Add pre_extra_linaer into the checkpoint
+                m["pre_extra_linear.weight"] = pre_extra_linear[:,dim_slice1:dim_slice2].float()
+
+                # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
+                fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")
+                print("Saving {}".format(layer_chkpt_path))
+
+                # Save the updated checkpoint
+                torch.save(m, layer_chkpt_path)
+                del m
+
+    def modify_optimizer_checkpoint(self):
         for mstate_id in range(self.max_mstate_id + 1):
             name = get_mstate_file_name(mstate_id)
             layer_chkpt_path = os.path.join(self.checkpoint_path, name)
@@ -339,6 +377,9 @@ class mutable_model:
             #checkpoint["optimizer"]["fp32_groups_flat"] = []
             if 'args' in checkpoint and 'num_layers' in checkpoint['args']:
                 checkpoint['args']['num_layers'] = self.new_layers_num
+            else:
+                # No change needed
+                continue
 
             # Rename for 2 reasons: keep the backup copy & also if symlink, don't overwrite the destination file
             fs_rename(layer_chkpt_path, layer_chkpt_path + ".orig")

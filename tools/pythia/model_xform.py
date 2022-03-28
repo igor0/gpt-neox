@@ -13,7 +13,7 @@ def canonicalize_args(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, default="extra_linear", choices=['logit_lens', 'extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'in_linear_all', 'all', 'all_100k'])
+    parser.add_argument("--mode", type=str, default="extra_linear", choices=['logit_lens', 'extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'in_linear_all', 'all', 'all_100k', 'pre_logit_lens', 'pre_extra_linear'])
     parser.add_argument("--head", type=str)
     parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink', 'next2', 'prev2'])
     parser.add_argument("--num_layers", type=int)

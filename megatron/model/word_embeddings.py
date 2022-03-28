@@ -82,6 +82,16 @@ class Embedding(torch.nn.Module):
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
 
+        if neox_args.pythia_pre_extra_linear:
+            self.pre_extra_linear= mpu.RowParallelLinear(
+                neox_args=neox_args,
+                input_size=neox_args.hidden_size,
+                output_size=neox_args.hidden_size,
+                bias=False,
+                input_is_parallel=False,
+                skip_bias_add=False,
+            )
+
     def add_tokentype_embeddings(self, num_tokentypes):
         """Add token-type embedding. This function is provided so we can add
         token-type embeddings in case the pretrained model does not have it.
@@ -114,6 +124,10 @@ class Embedding(torch.nn.Module):
 
         # Dropout.
         embeddings = self.embedding_dropout(embeddings)
+
+        if hasattr(self, 'pre_extra_linear'):
+            embeddings, bias = self.pre_extra_linear(embeddings)
+
         return embeddings
 
 
