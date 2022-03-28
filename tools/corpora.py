@@ -15,6 +15,7 @@
 # limitations under the License.
 
 
+import glob
 import os
 from abc import ABC, abstractmethod
 from multiprocessing import cpu_count
@@ -120,10 +121,7 @@ class DataDownloader(ABC):
     def tokenize(self):
         """tokenizes dataset"""
         parent_folder = os.path.join(self.base_dir, self.name)
-        jsonl_filepath = ",".join([
-            os.path.join(parent_folder, os.path.basename(url))
-            for url in self.urls
-        ])
+        jsonl_filepath = ",".join(glob.glob(parent_folder + "/*.zst"))
 
         cmd = f"python tools/preprocess_data.py \
             --input {jsonl_filepath} \
@@ -144,8 +142,8 @@ class DataDownloader(ABC):
         os.system(cmd)
 
     def prepare(self):
-        if not self.exists():
-            self.download()
+        if not self.exists() or True:
+            #self.download()
             self.tokenize()
 
 
@@ -169,6 +167,9 @@ class Github(DataDownloader):
     name = "github"
     urls = ["http://eaidata.bmk.sh/data/github_small.jsonl.zst"]
 
+class GithubData(DataDownloader):
+    name = "github_data"
+    urls = []
 
 class ArXiv(DataDownloader):
     name = "arxiv"
@@ -264,6 +265,7 @@ DATA_DOWNLOADERS = {
     "pile_subset": PileSubset,
     "pile": Pile,
     "github": Github,
+    "github_data": GithubData,
     "arxiv": ArXiv,
     "europarl": EuroParl,
     "freelaw": FreeLaw,
