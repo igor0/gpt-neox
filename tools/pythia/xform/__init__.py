@@ -186,6 +186,10 @@ class model_transform:
         if self.args.masterport is not None:
             conf['master_port'] = self.args.masterport + 29500
 
+        if self.args.seq_length is not None:
+            conf['seq-length'] = self.args.seq_length
+            conf['max-position-embeddings'] = 2 * self.args.seq_length
+
         # Other args that we need - may need to be reconfigured
         if self.args.mode == 'final_norm':
             # The final layer norm is in its own pre-final "layer"
