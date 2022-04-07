@@ -11,7 +11,7 @@ from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.gpt2_dataset import GPT2Dataset
 from megatron.data.samplers import DistributedBatchSampler
 
-class BatchShuffleDataset(torch.utils.data.Dataset):
+class MemorizationFriendlyDataset(torch.utils.data.Dataset):
     def __init__(self, dataset, batch_size):
         self.dataset = dataset
         self.batch_size = batch_size
@@ -23,7 +23,7 @@ class BatchShuffleDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         batch = (idx % self.batch_size)
         remapped_idx =  batch * (len(self) // self.batch_size) + (idx // self.batch_size)
-        return self.dataset.__get_item__(remapped_idx)
+        return self.dataset.__getitem__(remapped_idx)
 
 def make_data_loader(dataset, neox_args):
     """Buld dataloader given an input dataset."""
@@ -35,8 +35,8 @@ def make_data_loader(dataset, neox_args):
     global_batch_size = neox_args.batch_size * world_size
     num_workers = neox_args.num_workers
 
-    if neox_args.batch_shuffle:
-        dataset = BatchShuffleDataset(dataset)
+    if neox_args.mem_friendly_batch:
+        dataset = MemorizationFriendlyDataset(dataset, global_batch_size)
 
     # Use a simple sampler with distributed batch sampler.
     sampler = torch.utils.data.SequentialSampler(dataset)
@@ -310,7 +310,7 @@ def build_train_valid_test_data_iterators(neox_args):
                 seq_length=neox_args.seq_length,
                 seed=neox_args.seed,
                 skip_warmup=(not neox_args.mmap_warmup),
-                shuffle=neox_args.shuffle_data,
+                shuffle=(not neox_args.mem_friendly_batch),
             )
 
         # Build dataloders.

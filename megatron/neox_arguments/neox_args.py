@@ -669,8 +669,6 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     Should be a list the same length as `test_data_paths`
     """
 
-    shuffle_data: bool = True
-
     weight_by_num_documents: bool = False
     """
     If True, Builds dataset weights from a multinomial distribution over groups of data according to the number of
@@ -902,7 +900,7 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     Whether to calculate character level perplexity as well as token level perplexity. (may incur a time cost)
     """
 
-    batch_shuffle: bool = False
+    mem_friendly_batch: bool = False
 
 @dataclass
 class NeoXArgsTextgen(NeoXArgsTemplate):
@@ -968,3 +966,9 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
     """
 
     
+@dataclass
+class NeoXArgsPythia(NeoXArgsTemplate):
+    pythia_train_only: str = None
+    """
+    Only parameters whose names match the provided regular expression will be trained; all other parameters will be frozen.
+    """

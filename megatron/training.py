@@ -24,6 +24,7 @@ from datetime import datetime
 from functools import partial
 
 import math
+import re
 import sys
 
 import torch
@@ -259,6 +260,13 @@ def get_model(neox_args, inference=False, get_key_value=True):
         for name, param in model.named_parameters():
             if not "soft_embedding" in name:
                 param.requires_grad = False
+
+    if neox_args.pythia_train_only is not None:
+        print('Parameters:')
+        param_regex = re.compile(neox_args.pythia_train_only)
+        for name, param in model.named_parameters():
+            param.requires_grad = (param_regex.search(name) is not None)
+            print(f'    {name} requires_grad={param.requires_grad}')
 
     if not neox_args.is_pipe_parallel:
         # Export PipeParallel model to nn.Sequential model to avoid the overhead of deepspeed's pipe parallel training
@@ -570,6 +578,19 @@ def train(
 
     # get noise scale logger (if neox_args.log_gradient_noise_scale is True)
     noise_scale_logger = get_noise_scale_logger(neox_args)
+
+    # Initial eval
+    if False:
+        evaluate_and_print_results(
+            neox_args=neox_args,
+            prefix="initial eval",
+            forward_step_func=forward_step,
+            data_iterator=valid_data_iterator,
+            model=model,
+            iteration=iteration,
+            verbose=False,
+            timers=timers,
+        )
 
     # to monitor if we've skipped many iterations in a row and trigger an early exit
     overflow_monitor = OverflowMonitor(optimizer)
