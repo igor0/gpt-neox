@@ -99,27 +99,6 @@ def _post_transformer_block(args):
         raise ValueError('Incorrect number of args in `_post_transformer_block`')
     return fn(args)
 
-
-class KNNMemories:
-    def __init__(
-        self,
-        dim,
-        max_knn_memories,
-        knn_use_gpu,
-        num_memory_layers,
-        batch_size,
-        knn_memories_directory,
-    ):
-        memories_dir = Path(knn_memories_directory)
-
-        return [KNNMemory(
-                dim = dim,
-                max_memories = max_knn_memories,
-                knn_use_gpu = knn_use_gpu,
-                num_indices = batch_size,
-                memmap_filename = str(memories_dir / f'knn.memory.layer.{ind + 1}.memmap'))
-            for ind in range(num_memory_layers)]
-
 class GPT2ModelPipe(PipelineModule, torch.nn.Module):
     """GPT2Model adapted for pipeline parallelism.
 

@@ -24,6 +24,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 from .norms import get_norm
+from contextlib import contextmanager
 from megatron import mpu
 from megatron.model.fused_softmax import FusedScaleMaskSoftmax
 from megatron.model.activations import get_activation
@@ -261,7 +262,7 @@ class ParallelSelfAttention(nn.Module):
             self.rotary_emb = None
 
         self.attention_type = neox_args.attention_config[layer_number]
-        self.sparse = self.attention_type != "global"
+        self.sparse = self.attention_type != "global" and self.attention_type != "knn"
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -296,12 +297,17 @@ class ParallelSelfAttention(nn.Module):
             parallel_output=parallel_output,
         )
 
+        self.old_key_layer = None
+        self.old_value_layer = None
+
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
         # ===================================
+
+        #print("XXX", query_layer.shape, key_layer.shape, value_layer.shape, layer_past.shape if layer_past is not None else "")
 
         # [b, np, sq, sk]
         output_size = (
@@ -398,6 +404,7 @@ class ParallelSelfAttention(nn.Module):
         )
 
         # matmul: [b * np, sq, hn]
+        #print("XXX", attention_probs.shape, value_layer.shape)
         context_layer = torch.bmm(attention_probs, value_layer.transpose(0, 1))
 
         # change view [b, np, sq, hn]
@@ -445,6 +452,9 @@ class ParallelSelfAttention(nn.Module):
             mixed_x_layer, 3
         )
 
+        old_key_layer = key_layer.clone()
+        old_value_layer = value_layer.clone()
+
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
                 # partial rotary
@@ -490,6 +500,18 @@ class ParallelSelfAttention(nn.Module):
 
         if self.get_key_value:
             present = torch.stack((key_layer, value_layer))
+
+        if self.old_key_layer is not None:
+            key_layer = torch.cat((self.old_key_layer, key_layer), dim=0)
+            value_layer = torch.cat((self.old_value_layer, value_layer), dim=0)
+        
+        if self.attention_type == "knn":
+            if self.old_key_layer is None:
+                self.old_key_layer = old_key_layer
+                self.old_value_layer = old_value_layer
+            else:
+                self.old_key_layer = torch.cat((self.old_key_layer, old_key_layer), dim=0)[-old_key_layer.shape[0]//2:]
+                self.old_value_layer = torch.cat((self.old_value_layer, old_value_layer), dim=0)[-old_key_layer.shape[0]//2:]
 
         if not self.sparse:
             context_layer = self.attention(
@@ -580,6 +602,10 @@ class ParallelTransformerLayer(nn.Module):
             parallel_output=self.gpt_j_residual,
         )
 
+        # KNN memories
+        self.max_knn_memories = 16
+        self.knn_use_gpu = False
+
     def _get_bias_dropout(self):
         if self.bias_dropout_fusion:
             fn = (
@@ -590,6 +616,32 @@ class ParallelTransformerLayer(nn.Module):
         else:
             fn = get_bias_dropout_add(self.training)
         return fn
+
+    def _create_knn_memories(
+        self,
+        *,
+        batch_size,
+        knn_memories_directory = None
+    ):
+        knn_memories_directory = default(knn_memories_directory, self.knn_memories_directory)
+        memories_dir = Path(knn_memories_directory)
+
+        return [KNNMemory(
+            dim = self.dim_head,
+            max_memories = self.max_knn_memories,
+            knn_use_gpu = self.knn_use_gpu,
+            num_indices = batch_size,
+            memmap_filename = str(memories_dir / f'knn.memory.layer.{ind + 1}.memmap')) for ind in range(self.num_memory_layers)]
+
+    @contextmanager
+    def knn_memories_context(
+        self,
+        **kwargs
+    ):
+        knn_memories = self._create_knn_memories(**kwargs)
+        yield knn_memories
+        for memory in knn_memories:
+            del memory
 
     def forward(self, x, attention_mask, layer_past=None):
         bias_dropout_fn = self._get_bias_dropout()

@@ -112,6 +112,9 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
         key_seq_len = data_size[-1]
         attn_batch_size = data_size[0] * data_size[1]
 
+        # data_size torch.Size([1, 6, 32, 64]) query_seq_len 32 key_seq_len 64 attn_batch_size 6
+        #print("data_size", data_size, "query_seq_len", query_seq_len, "key_seq_len", key_seq_len, "attn_batch_size", attn_batch_size)
+
         # constraints on various tensor dimensions to enable warp based
         # optimization and upper triangular optimization (for causal mask)
 
@@ -127,12 +130,22 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
             else:
                 probs = ScaledMaskedSoftmax.apply(input, mask, scale)
         else:
+            #print("fused_softmax::forward", input.shape, mask.shape)
+            #input: ([1, 6, 32, 64]) # batch, head, pos_query, pos_key
+            #mask: ([1, 1, 32, 32]) # batch, head, pos_query, pos_key
+
             if self.input_in_float16 and self.softmax_in_fp32:
                 input = input.float()
 
             if self.scale is not None:
                 input = input * self.scale
-            mask_output = self.mask_func(input, mask)
+            if mask.shape[3] == input.shape[3]:
+                mask_output = self.mask_func(input, mask)
+            else:
+                input2 = input[:,:,:,-mask.shape[3]:]
+                mask_output = self.mask_func(input2, mask)
+                mask_output = torch.cat((input[:,:,:,:-mask.shape[3]], mask_output), dim=3)
+
             probs = torch.nn.Softmax(dim=-1)(mask_output)
 
             if self.input_in_float16 and self.softmax_in_fp32:
