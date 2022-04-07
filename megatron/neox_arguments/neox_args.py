@@ -902,6 +902,7 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     Whether to calculate character level perplexity as well as token level perplexity. (may incur a time cost)
     """
 
+    batch_shuffle: bool = False
 
 @dataclass
 class NeoXArgsTextgen(NeoXArgsTemplate):

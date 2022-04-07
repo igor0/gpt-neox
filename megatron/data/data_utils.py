@@ -11,6 +11,19 @@ from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.gpt2_dataset import GPT2Dataset
 from megatron.data.samplers import DistributedBatchSampler
 
+class BatchShuffleDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, batch_size):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.len = (len(self.dataset) // batch_size) * batch_size
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, idx):
+        batch = (idx % self.batch_size)
+        remapped_idx =  batch * (len(self) // self.batch_size) + (idx // self.batch_size)
+        return self.dataset.__get_item__(remapped_idx)
 
 def make_data_loader(dataset, neox_args):
     """Buld dataloader given an input dataset."""
@@ -21,6 +34,9 @@ def make_data_loader(dataset, neox_args):
     rank = mpu.get_data_parallel_rank()
     global_batch_size = neox_args.batch_size * world_size
     num_workers = neox_args.num_workers
+
+    if neox_args.batch_shuffle:
+        dataset = BatchShuffleDataset(dataset)
 
     # Use a simple sampler with distributed batch sampler.
     sampler = torch.utils.data.SequentialSampler(dataset)
