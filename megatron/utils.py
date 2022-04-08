@@ -339,7 +339,8 @@ class OverflowMonitor:
     def check(self, skipped):
         self.history.append(skipped)
         if (
-            self.optimizer.overflow
+            hasattr(self.optimizer, "overflow")
+            and self.optimizer.overflow
             and len(self.history) == self.n
             and all(self.history)
         ):
