@@ -26,6 +26,7 @@ from functools import partial
 import math
 import re
 import sys
+import wandb
 
 import torch
 import deepspeed
@@ -93,7 +94,7 @@ def pretrain(neox_args):
     timers("train/valid/test data iterators").start()
     (
         train_data_iterator,
-        valid_data_iterator,
+        valid_data_loader,
         test_data_iterator,
     ) = build_train_valid_test_data_iterators(neox_args=neox_args)
     timers("train/valid/test data iterators").stop()
@@ -102,6 +103,9 @@ def pretrain(neox_args):
     print_rank_0("done with setups ...")
     timers.log(["model and optimizer", "train/valid/test data iterators"])
     print_rank_0("training ...")
+
+    # log gradient updates to wandb
+    wandb.watch(model, log_freq=100)
 
     iteration = 0
     if neox_args.do_train and neox_args.train_iters > 0:
@@ -112,7 +116,7 @@ def pretrain(neox_args):
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             train_data_iterator=train_data_iterator,
-            valid_data_iterator=valid_data_iterator,
+            valid_data_loader=valid_data_loader,
         )
 
     if neox_args.do_valid:
@@ -121,7 +125,7 @@ def pretrain(neox_args):
             neox_args=neox_args,
             prefix=prefix,
             forward_step_func=forward_step,
-            data_iterator=valid_data_iterator,
+            data_iterator=iter(valid_data_loader),
             model=model,
             iteration=iteration,
             verbose=False,
@@ -165,6 +169,10 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
     attention_mask, loss_mask, position_ids = get_ltor_masks_and_position_ids(
         tokens, tokenizer.eod, neox_args.eod_mask_loss
     )
+
+    #print("############################################")
+    #print(tokenizer.detokenize(tokens_[0].tolist()))
+    #print("############################################")
 
     return tokens, labels, loss_mask, attention_mask, position_ids
 
@@ -560,7 +568,7 @@ def train(
     optimizer,
     lr_scheduler,
     train_data_iterator,
-    valid_data_iterator,
+    valid_data_loader,
 ):
     """Train the model function."""
 
@@ -580,12 +588,12 @@ def train(
     noise_scale_logger = get_noise_scale_logger(neox_args)
 
     # Initial eval
-    if False:
+    if True:
         evaluate_and_print_results(
             neox_args=neox_args,
             prefix="initial eval",
             forward_step_func=forward_step,
-            data_iterator=valid_data_iterator,
+            data_iterator=iter(valid_data_loader),
             model=model,
             iteration=iteration,
             verbose=False,
@@ -657,7 +665,7 @@ def train(
                 neox_args=neox_args,
                 prefix=prefix,
                 forward_step_func=forward_step,
-                data_iterator=valid_data_iterator,
+                data_iterator=iter(valid_data_loader),
                 model=model,
                 iteration=iteration,
                 verbose=False,

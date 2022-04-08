@@ -122,6 +122,9 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
 
         # invoke custom kernel
         if self.input_in_float16 and data_size[-1] <= 2048 and mask is not None and custom_kernel_constraint and (self.upper_triang_mask_fusion or self.general_mask_fusion) and query_seq_len == key_seq_len:
+            if mask.shape[3] != input.shape[3]:
+                print("Not supported.")
+                exit(1)
             scale = self.scale if self.scale is not None else 1.0
             if self.upper_triang_mask_fusion:
                 input = input.view(-1, query_seq_len, key_seq_len)
@@ -139,7 +142,9 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
 
             if self.scale is not None:
                 input = input * self.scale
-            if mask.shape[3] == input.shape[3]:
+            if mask is None:
+                mask_output = input
+            elif mask.shape[3] == input.shape[3]:
                 mask_output = self.mask_func(input, mask)
             else:
                 input2 = input[:,:,:,-mask.shape[3]:]

@@ -361,17 +361,12 @@ def build_train_valid_test_data_iterators(neox_args):
     else:
         train_data_iterator = None
 
-    if valid_dataloader is not None:
-        valid_data_iterator = iter(valid_dataloader)
-    else:
-        valid_data_iterator = None
-
     if test_dataloader is not None:
         test_data_iterator = iter(test_dataloader)
     else:
         test_data_iterator = None
 
-    return train_data_iterator, valid_data_iterator, test_data_iterator 
+    return train_data_iterator, valid_dataloader, test_data_iterator
 
 
 def compile_helper():

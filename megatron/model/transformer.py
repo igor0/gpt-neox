@@ -300,6 +300,11 @@ class ParallelSelfAttention(nn.Module):
         self.old_key_layer = None
         self.old_value_layer = None
 
+        #self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
+        #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
+        #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
+        self.combine_attn_output_gate = nn.Parameter(2.0 * torch.ones(neox_args.num_attention_heads, 1, 1))
+
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask
     ):
@@ -452,8 +457,8 @@ class ParallelSelfAttention(nn.Module):
             mixed_x_layer, 3
         )
 
-        old_key_layer = key_layer.clone()
-        old_value_layer = value_layer.clone()
+        cur_key_layer = key_layer.clone().detach()
+        cur_value_layer = value_layer.clone().detach()
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
@@ -502,21 +507,23 @@ class ParallelSelfAttention(nn.Module):
             present = torch.stack((key_layer, value_layer))
 
         if self.old_key_layer is not None:
-            key_layer = torch.cat((self.old_key_layer, key_layer), dim=0)
-            value_layer = torch.cat((self.old_value_layer, value_layer), dim=0)
-        
-        if self.attention_type == "knn":
-            if self.old_key_layer is None:
-                self.old_key_layer = old_key_layer
-                self.old_value_layer = old_value_layer
-            else:
-                self.old_key_layer = torch.cat((self.old_key_layer, old_key_layer), dim=0)[-old_key_layer.shape[0]//2:]
-                self.old_value_layer = torch.cat((self.old_value_layer, old_value_layer), dim=0)[-old_key_layer.shape[0]//2:]
+            ##key_layer = torch.cat((self.old_key_layer + self.knn_embed_key, key_layer), dim=0)
+            #key_layer = torch.cat((self.old_key_layer, key_layer), dim=0)
+            #value_layer = torch.cat((self.old_value_layer, value_layer), dim=0)
+            pass
 
         if not self.sparse:
             context_layer = self.attention(
                 query_layer, key_layer, value_layer, layer_past, attention_mask
             )
+            if self.attention_type == "knn" and self.old_key_layer != None:
+                # query_layer: [sq, b, np, hn]
+                # mask: (b, np, sq, sk)
+                context_layer_mem = self.attention(
+                    query_layer, self.old_key_layer, self.old_value_layer, None, None
+                )
+                gate = self.combine_attn_output_gate.sigmoid()
+                context_layer = context_layer * gate + context_layer_mem * (1 - gate)
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask
@@ -530,6 +537,16 @@ class ParallelSelfAttention(nn.Module):
             self.hidden_size_per_partition,
         )
         context_layer = context_layer.view(*new_context_layer_shape)
+
+        # Store the memories
+        if self.attention_type == "knn":
+            #if self.old_key_layer is None:
+                self.old_key_layer = cur_key_layer
+                self.old_value_layer = cur_value_layer
+                #print("old_key_layer", self.old_key_layer.shape, self.old_key_layer.requires_grad, "old_value_layer", self.old_value_layer.shape, self.old_key_layer.requires_grad)
+            #else:
+                #self.old_key_layer = torch.cat((self.old_key_layer, cur_key_layer), dim=0)[-cur_key_layer.shape[0]*4:]
+                #self.old_value_layer = torch.cat((self.old_value_layer, cur_value_layer), dim=0)[-cur_key_layer.shape[0]*4:]
 
         # =================
         # Output. [sq, b, h]
