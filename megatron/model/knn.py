@@ -42,7 +42,8 @@ class KNN():
         M = 15,
         use_gpu = False
     ):
-        index = faiss.IndexHNSWFlat(dim, M, faiss.METRIC_INNER_PRODUCT)
+        #index = faiss.IndexHNSWFlat(dim, M, faiss.METRIC_INNER_PRODUCT)
+        index = faiss.IndexFlatIP(dim)
         self.use_gpu = use_gpu
 
         self.index = faiss.index_cpu_to_gpu(faiss.StandardGpuResources(), FAISS_INDEX_GPU_ID, index) if use_gpu else index
