@@ -303,7 +303,7 @@ class ParallelSelfAttention(nn.Module):
         #self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
         #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
         #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
-        self.combine_attn_output_gate = nn.Parameter(2.0 * torch.ones(neox_args.num_attention_heads, 1, 1))
+        self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
 
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask
@@ -522,7 +522,7 @@ class ParallelSelfAttention(nn.Module):
                 context_layer_mem = self.attention(
                     query_layer, self.old_key_layer, self.old_value_layer, None, None
                 )
-                gate = self.combine_attn_output_gate.sigmoid()
+                gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
                 context_layer = context_layer * gate + context_layer_mem * (1 - gate)
         else:
             context_layer = self.sparse_attention(
@@ -540,13 +540,12 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            #if self.old_key_layer is None:
+            if self.old_key_layer is None:
                 self.old_key_layer = cur_key_layer
                 self.old_value_layer = cur_value_layer
-                #print("old_key_layer", self.old_key_layer.shape, self.old_key_layer.requires_grad, "old_value_layer", self.old_value_layer.shape, self.old_key_layer.requires_grad)
-            #else:
-                #self.old_key_layer = torch.cat((self.old_key_layer, cur_key_layer), dim=0)[-cur_key_layer.shape[0]*4:]
-                #self.old_value_layer = torch.cat((self.old_value_layer, cur_value_layer), dim=0)[-cur_key_layer.shape[0]*4:]
+            else:
+                self.old_key_layer = torch.cat((self.old_key_layer, cur_key_layer), dim=0)[-cur_key_layer.shape[0]*4:]
+                self.old_value_layer = torch.cat((self.old_value_layer, cur_value_layer), dim=0)[-cur_key_layer.shape[0]*4:]
 
         # =================
         # Output. [sq, b, h]

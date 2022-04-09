@@ -1,6 +1,7 @@
 import torch
 import math
 from torch.nn.parameter import Parameter
+from torch import nn
 
 from megatron import mpu
 from megatron.model.positional_embeddings import SinusoidalPositionalEmbedding
@@ -81,6 +82,7 @@ class Embedding(torch.nn.Module):
 
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
+        self.dummy = nn.Parameter(torch.ones(1))
 
     def add_tokentype_embeddings(self, num_tokentypes):
         """Add token-type embedding. This function is provided so we can add
@@ -114,7 +116,7 @@ class Embedding(torch.nn.Module):
 
         # Dropout.
         embeddings = self.embedding_dropout(embeddings)
-        return embeddings
+        return embeddings * self.dummy
 
 
 class EmbeddingPipe(Embedding):
