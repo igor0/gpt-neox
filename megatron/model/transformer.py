@@ -303,7 +303,7 @@ class ParallelSelfAttention(nn.Module):
         #self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
         #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
         #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
-        self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
+        self.combine_attn_output_gate = nn.Parameter(0.02 * torch.ones(neox_args.num_attention_heads, 1, 1))
 
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask
@@ -459,6 +459,8 @@ class ParallelSelfAttention(nn.Module):
 
         cur_key_layer = key_layer.clone().detach()
         cur_value_layer = value_layer.clone().detach()
+        #cur_key_layer = l2norm(cur_key_layer)
+        #cur_value_layer = l2norm(cur_value_layer)
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
@@ -522,7 +524,7 @@ class ParallelSelfAttention(nn.Module):
                 context_layer_mem = self.attention(
                     query_layer, self.old_key_layer, self.old_value_layer, None, None
                 )
-                gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
+                gate = (self.combine_attn_output_gate * 100.0).sigmoid()
                 context_layer = context_layer * gate + context_layer_mem * (1 - gate)
         else:
             context_layer = self.sparse_attention(
@@ -828,3 +830,6 @@ def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=Non
         return logits_parallel
 
     return mpu.gather_from_model_parallel_region(logits_parallel)
+
+def l2norm(t):
+    return F.normalize(t, dim = -1)
