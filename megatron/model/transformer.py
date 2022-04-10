@@ -309,7 +309,7 @@ class ParallelSelfAttention(nn.Module):
             #self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
             #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
             #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
-            self.combine_attn_output_gate = nn.Parameter(0.02 * torch.ones(neox_args.num_attention_heads, 1, 1))
+            self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
 
             memories_directory = knn.DEFAULT_KNN_MEMORY_MEMMAP_DIRECTORY
             memories_path = Path(memories_directory)
@@ -318,8 +318,9 @@ class ParallelSelfAttention(nn.Module):
             self.knn_memory = knn.KNNMemory(
                 num_indices = neox_args.batch_size,
                 memmap_filename = str(memories_path / f'knn.memory.layer.{self.layer_number}.memmap'),
-                dim=neox_args.hidden_size,
-                max_memories=2048
+                dim=self.hidden_size_per_attention_head,
+                max_memories=2048,
+                knn_use_gpu=False
             )
 
     def attention(
@@ -531,18 +532,18 @@ class ParallelSelfAttention(nn.Module):
             )
             if self.attention_type == "knn" and self.old_key_layer != None:
                 #[sq, b, np, hn] -> [b, np, sq, hn]
-                queries = rearrange(query_layer, 'sq b np hn -> b np sq hn')
+                #queries = rearrange(query_layer, 'sq b np hn -> b np sq hn')
 
-                # b n d
-                # b h n d
-                values = self.knnsearch(queries, topk=32)
+                # b n kv d
+                #all_key_values, all_masks = self.knn_memory.search(queries, topk=32)
+                #print("all_key_values", all_key_values.shape, "all_masks", all_masks.shape)
 
                 # query_layer: [sq, b, np, hn]
                 # mask: (b, np, sq, sk)
                 context_layer_mem = self.attention(
                     query_layer, self.old_key_layer, self.old_value_layer, None, None
                 )
-                gate = (self.combine_attn_output_gate * 100.0).sigmoid()
+                gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
                 context_layer = context_layer * gate + context_layer_mem * (1 - gate)
         else:
             context_layer = self.sparse_attention(
@@ -565,15 +566,14 @@ class ParallelSelfAttention(nn.Module):
                     self.old_key_layer = cur_key_layer
                     self.old_value_layer = cur_value_layer
                 else:
-                    self.old_key_layer = torch.cat((self.old_key_layer, cur_key_layer), dim=0)[-cur_key_layer.shape[0]*4:]
-                    self.old_value_layer = torch.cat((self.old_value_layer, cur_value_layer), dim=0)[-cur_key_layer.shape[0]*4:]
-            if True:
+                    self.old_key_layer = torch.cat((self.old_key_layer, cur_key_layer), dim=0)[-cur_key_layer.shape[0]//2:]
+                    self.old_value_layer = torch.cat((self.old_value_layer, cur_value_layer), dim=0)[-cur_key_layer.shape[0]//2:]
+            if False:
                 # key_layer/value_layer: [sq, b, np, hn]
                 keys_to_add = rearrange(cur_key_layer, 'sq b np hn -> b (sq np) 1 hn')
                 vals_to_add = rearrange(cur_value_layer, 'sq b np hn -> b (sq np) 1 hn')
                 #[sq, b, np, hn] -> [b, np, sq, hn]
                 x = torch.cat((keys_to_add, vals_to_add), dim=2)
-                print("XXX", x.shape)
                 # b n kv d
                 self.knn_memory.add(x)
         # =================
