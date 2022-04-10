@@ -323,13 +323,74 @@ class ParallelSelfAttention(nn.Module):
                 knn_use_gpu=False
             )
 
+    def knn_lookup(
+        self, query_layer, key_layer, value_layer, knn_key_count
+    ):
+        print("knn_lookup", "query_layer", query_layer.shape, "key_layer", key_layer.shape, "value_layer", value_layer.shape)
+        # ===================================
+        # Raw attention scores. [b, np, s, s]
+        # ===================================
+
+        # [b, np, sq, sk]
+        output_size = (
+            query_layer.size(1),
+            query_layer.size(2),
+            query_layer.size(0),
+            key_layer.size(0),
+        )
+
+        # [sq, b, np, hn] -> [sq, b * np, hn]
+        query_layer = query_layer.view(
+            output_size[2], output_size[0] * output_size[1], -1
+        )
+        key_layer = key_layer.view(output_size[3], output_size[0] * output_size[1], -1)
+        value_layer = value_layer.view(output_size[3], output_size[0] * output_size[1], -1)
+
+        # preallocating result tensor: [b * np, sq, sk]
+        matmul_result = torch.empty(
+            output_size[0] * output_size[1],
+            output_size[2],
+            output_size[3],
+            dtype=query_layer.dtype,
+            device=torch.cuda.current_device(),
+        )
+
+        # Raw attention scores. [b * np, sq, sk]
+        matmul_result = torch.baddbmm(
+            matmul_result,
+            query_layer.transpose(0, 1),  # [b * np, sq, hn]
+            key_layer.transpose(0, 1).transpose(1, 2),  # [b * np, hn, sk]
+            beta=0.0,
+            alpha=(1.0 / self.norm_factor),
+        )
+
+        # change view to [b, np, sq, sk]
+        attention_scores = matmul_result.view(*output_size)
+
+        # 'b np sq sk' -> 'b np sq tk' (tk: topk key)
+        attention_scores, attention_indices = attention_scores.topk(knn_key_count)
+        attention_indices = rearrange(attention_indices, 'b np sq tk -> sq (b np) tk')
+
+        # key_layer: [sk, b * np, hn]
+        # key_result: [sq, b * np, tk, hn]
+        key_result = torch.gather(
+            rearrange(key_layer, 'sk x hn -> x sk hn').unsqueeze(0).expand(query_layer.shape[0], -1, -1, -1),
+            dim=2,
+            index=attention_indices.unsqueeze(3).expand(-1, -1, -1, query_layer.shape[2]))
+
+        value_result =  torch.gather(
+            rearrange(value_layer, 'sk x hn -> x sk hn').unsqueeze(0).expand(query_layer.shape[0], -1, -1, -1),
+            dim=2,
+            index=attention_indices.unsqueeze(3).expand(-1, -1, -1, key_layer.shape[2]))
+
+        return key_result, value_result
+
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
         # ===================================
-        knn_key_count = min(32, key_layer.size(0)) if attention_mask is None else key_layer.size(0)
 
         # [b, np, sq, sk]
         output_size = (
@@ -392,16 +453,6 @@ class ParallelSelfAttention(nn.Module):
         if self.pos_emb == "alibi":
             attention_scores = self.alibi_embed(attention_scores)
 
-        key_scatter = None
-
-        if attention_mask is None:
-            # This is the KNN attention
-            # XXX: >= just for testing
-            if attention_scores.shape[3] >= knn_key_count:
-                # 'b np sq sk' -> 'b np sq tk' (tk: topk key)
-                attention_scores, attention_indices = attention_scores.topk(knn_key_count)
-                key_scatter = rearrange(attention_indices, 'b np sq tk -> (b np) sq tk')
-
         # attention scores and attention mask [b, np, sq, sk]
         attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
 
@@ -431,15 +482,6 @@ class ParallelSelfAttention(nn.Module):
         attention_probs = attention_probs.view(
             output_size[0] * output_size[1], output_size[2], -1
         )
-
-        if key_scatter is not None:
-            # [b * np, sq, key_idx] gather [b * np, sq, sk] -> [b * np, sq, sk]
-            attention_probs2 = torch.zeros(
-                attention_probs.shape[0], attention_probs.shape[1], key_layer.size(0),
-                dtype=query_layer.dtype,
-                device=torch.cuda.current_device())
-            attention_probs2.scatter_(dim=2, index=key_scatter, src=attention_probs)
-            attention_probs = attention_probs2
 
         # [b * np, sq, sk] * [b * np, sk, hn] -> [b * np, sq, hn]
         context_layer = torch.bmm(attention_probs, value_layer.transpose(0, 1))
@@ -554,11 +596,13 @@ class ParallelSelfAttention(nn.Module):
 
                 # query_layer: [sq, b, np, hn]
                 # mask: (b, np, sq, sk)
-                context_layer_mem = self.attention(
-                    query_layer, self.old_key_layer, self.old_value_layer, None, None
+                key_lookup, value_lookup = self.knn_lookup(
+                    query_layer, self.old_key_layer, self.old_value_layer, knn_key_count=32
                 )
+
+                print("key_lookup", key_lookup.shape, "value_lookup", value_lookup.shape)
                 gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                context_layer = context_layer * gate + context_layer_mem * (1 - gate)
+                #context_layer = context_layer * gate + context_layer_mem * (1 - gate)
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask
