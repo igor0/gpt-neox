@@ -326,7 +326,6 @@ class ParallelSelfAttention(nn.Module):
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
     ):
-        print("knn_lookup", "query_layer", query_layer.shape, "key_layer", key_layer.shape, "value_layer", value_layer.shape)
         # ===================================
         # Raw attention scores. [b, np, s, s]
         # ===================================
@@ -360,8 +359,6 @@ class ParallelSelfAttention(nn.Module):
             matmul_result,
             query_layer.transpose(0, 1),  # [b * np, sq, hn]
             key_layer.transpose(0, 1).transpose(1, 2),  # [b * np, hn, sk]
-            beta=0.0,
-            alpha=(1.0 / self.norm_factor),
         )
 
         # change view to [b, np, sq, sk]
@@ -383,7 +380,70 @@ class ParallelSelfAttention(nn.Module):
             dim=2,
             index=attention_indices.unsqueeze(3).expand(-1, -1, -1, key_layer.shape[2]))
 
-        return key_result, value_result
+        # TODO: not sure if the clone().detach() is needed
+        return key_result.clone().detach(), value_result.clone().detach()
+
+    def knn_attention(
+        self, query_layer, key_lookup, value_lookup,
+    ):
+        """
+            query_layer: [sq, b, np, hn]
+            key_lookup: [sq, b * np, tk, hn]
+            value_lookup: [sq, b * np, tk, hn]
+        """
+        # ===================================
+        # Raw attention scores. [b, np, s, s]
+        # ===================================
+
+        # [b, np, sq, tk]
+        output_size = (
+            query_layer.size(1),
+            query_layer.size(2),
+            query_layer.size(0),
+            key_lookup.size(2),
+        )
+
+        # [sq, b, np, hn] -> [sq, b * np, hn]
+        query_layer = query_layer.view(
+            output_size[2], output_size[0] * output_size[1], -1
+        )
+
+        # Raw attention scores. [b * np, sq, tk]
+
+        # [sq, b * np, hn] x [sq, b * np, tk, hn] -> [sq, b * np, tk]
+        attention_scores = torch.einsum('ijm, ijkm -> ijk', query_layer, key_lookup)
+        attention_scores = attention_scores / self.norm_factor
+        attention_scores = attention_scores.view(*output_size)
+        attention_scores = rearrange(attention_scores, "sq b np tk -> b np sq tk")
+
+        # ===========================
+        # Attention probs and dropout
+        # ===========================
+
+        # attention scores [b, np, sq, tk]
+        attention_probs = self.scale_mask_softmax(attention_scores, None)
+
+        # This is actually dropping out entire tokens to attend to, which might
+        # seem a bit unusual, but is taken from the original Transformer paper.
+        with mpu.get_cuda_rng_tracker().fork():
+            attention_probs = self.attention_dropout(attention_probs)
+
+        # =========================
+        # Context layer. [sq, b, hp]
+        # =========================
+
+        # attention_probs
+        # expected: [b, np, sq, tk]
+        # got: [np, sq, b, tk]
+
+        attention_probs = rearrange(attention_probs, 'np sq b tk -> sq (b np) tk')
+
+        # attention_probs: [sq, b * np, tk]
+        # value_lookup: [sq, b * np, tk, hn]
+        attention_scores = torch.einsum('ijk, ijkm -> ijm', attention_probs, value_lookup)
+
+        # change view [b, np, sq, hn]
+        return rearrange(attention_scores, 'sq (b np) hn -> b np sq hn', b=output_size[0], np=output_size[1])
 
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask
@@ -600,9 +660,12 @@ class ParallelSelfAttention(nn.Module):
                     query_layer, self.old_key_layer, self.old_value_layer, knn_key_count=32
                 )
 
-                print("key_lookup", key_lookup.shape, "value_lookup", value_lookup.shape)
+                context_layer_mem = self.knn_attention(
+                    query_layer, key_lookup, value_lookup,
+                )
+
                 gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                #context_layer = context_layer * gate + context_layer_mem * (1 - gate)
+                context_layer = context_layer * gate + context_layer_mem * (1 - gate)
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask
