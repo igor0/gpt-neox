@@ -144,12 +144,8 @@ class FusedScaleMaskSoftmax(torch.nn.Module):
                 input = input * self.scale
             if mask is None:
                 mask_output = input
-            elif mask.shape[3] == input.shape[3]:
-                mask_output = self.mask_func(input, mask)
             else:
-                input2 = input[:,:,:,-mask.shape[3]:]
-                mask_output = self.mask_func(input2, mask)
-                mask_output = torch.cat((input[:,:,:,:-mask.shape[3]], mask_output), dim=3)
+                mask_output = self.mask_func(input, mask)
 
             probs = torch.nn.Softmax(dim=-1)(mask_output)
 

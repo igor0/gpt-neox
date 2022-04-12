@@ -307,7 +307,7 @@ class ParallelSelfAttention(nn.Module):
             #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
             #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
             self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
-            self.memory = memory.SimpleMemory(8192)
+            self.memory = memory.SimpleMemory(4096)
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
@@ -647,8 +647,9 @@ class ParallelSelfAttention(nn.Module):
                     query_layer, old_keys, old_vals, None, memory_mask
                 )
 
-                gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                context_layer = context_layer * gate + context_layer_mem * (1 - gate)
+                #gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
+                #context_layer = context_layer * gate + context_layer_mem * (1 - gate)
+                context_layer = context_layer + context_layer_mem
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask

@@ -24,7 +24,7 @@ class SimpleMemory:
             self.keys = torch.cat((self.keys, keys), dim=0)
             self.values = torch.cat((self.values, values), dim=0)
 
-        # invalidate any memories before the most newest EOD token
+        # invalidate any memories before the newest EOD token
 
         for i in range(len(eod_markers)):
             # if there are any EOD markers, invalidate the memories up to (but excluding) the last marker
@@ -48,12 +48,16 @@ class SimpleMemory:
         #    - queries from after EOS
 
         # memory_mask: [b, sq, sk]
-        memory_mask = torch.full(size=(self.keys.shape[1], 1, query_count, self.keys.shape[0]), fill_value=True, device=self.keys.device)
+        memory_mask = torch.full(
+            size=(self.keys.shape[1], 1, query_count, self.keys.shape[0]),
+            fill_value=True,
+            device=self.keys.device)
 
         for batch in range(memory_mask.shape[0]):
             keys_valid_from = self.valid_from[batch]
             queries_valid_to = eod_markers[batch][0]
             memory_mask[batch][:][:queries_valid_to][keys_valid_from:] = False
+            #print(batch, "keys (", keys_valid_from, memory_mask.shape[3], ") queries (", 0, queries_valid_to, ")")
 
         return self.keys, self.values, memory_mask
 
