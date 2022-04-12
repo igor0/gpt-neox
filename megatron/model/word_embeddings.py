@@ -143,9 +143,9 @@ class EmbeddingPipe(Embedding):
 
         embeddings = super().forward(input_ids, position_ids)
         if in_inference:
-            return embeddings, layer_past, attention_mask
+            return embeddings, layer_past, input_ids.tolist(), attention_mask
         else:
-            return embeddings, attention_mask
+            return embeddings, input_ids.tolist(), attention_mask
 
 class SoftEmbedding(torch.nn.Module):
 
@@ -176,6 +176,8 @@ class SoftEmbedding(torch.nn.Module):
     def forward(self, args: tuple):
         in_inference = len(args) == 3  # embeddings, layer_past, attention_mask
         in_train = len(args) == 2 # embeddings, attention_mask
+        raise BaseException("Not supported")
+
         if in_train:
             embedding, attention_mask = args
         else:

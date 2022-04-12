@@ -350,6 +350,7 @@ def build_train_valid_test_data_iterators(neox_args):
     if valid_dataloader is not None:
         start_iter_val = ((neox_args.iteration * neox_args.gradient_accumulation_steps) // neox_args.eval_interval) * \
                          neox_args.eval_iters
+        start_iter_val = 0
         valid_dataloader.batch_sampler.start_iter = start_iter_val % \
                                                     len(valid_dataloader)
         print_rank_0('setting validation data start iteration to {}'.

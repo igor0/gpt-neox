@@ -68,15 +68,16 @@ def cross_entropy(output, labels, _fp16=False):
 def _pre_transformer_block(args):
     # used instead of a lambda layer to pass outputs of the word embedding to the transformer block
     # using a custom function means we don't have to have this _inference mode which makes everything tricky
-    in_inference = len(args) == 3
-    in_train = len(args) == 2
+    in_inference = len(args) == 4
+    in_train = len(args) == 3
+
     # data format change for hidden_states to avoid explicit tranposes : [b s h] --> [s b h]
     if in_inference:
         # we need to add a container to cache `presents` from each layer's forward pass
         # inputs/outputs are now (hidden_states, layer_past, presents, attention_mask)
-        fn = lambda x: (x[0].transpose(0, 1).contiguous(), x[1], torch.Tensor(), *x[2:])
+        fn = lambda x: (x[0].transpose(0, 1).contiguous(), x[1], torch.Tensor(), x[2], x[3])
     elif in_train:
-        fn = lambda x: (x[0].transpose(0, 1).contiguous(), *x[1:])
+        fn = lambda x: (x[0].transpose(0, 1).contiguous(), x[1], x[2])
     else:
         raise ValueError('Incorrect number of args in `_pre_transformer_block`')
     return fn(args)
@@ -85,8 +86,9 @@ def _pre_transformer_block(args):
 def _post_transformer_block(args):
     # used instead of a lambda layer to pass outputs of the transformer block to the final layer
     # using a custom function means we don't have to have this _inference mode which makes everything tricky
-    in_inference = len(args) == 4
-    in_train = len(args) == 2
+    in_inference = len(args) == 5
+    in_train = len(args) == 3
+
     if in_inference:
         # we can get rid of the mask / pasts now
         # from (hidden_states, layer_past, presents, attention_mask)

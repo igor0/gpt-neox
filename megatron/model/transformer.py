@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
-from . import knn
+from . import memory
 from .norms import get_norm
 
 from einops import rearrange
@@ -302,26 +302,12 @@ class ParallelSelfAttention(nn.Module):
             parallel_output=parallel_output,
         )
 
-        self.old_key_layer = None
-        self.old_value_layer = None
-
         if self.attention_type == "knn":
             #self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
             #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
             #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
             self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
-
-            memories_directory = knn.DEFAULT_KNN_MEMORY_MEMMAP_DIRECTORY
-            memories_path = Path(memories_directory)
-            memories_path.mkdir(exist_ok = True, parents = True)
-
-            self.knn_memory = knn.KNNMemory(
-                num_indices = neox_args.batch_size,
-                memmap_filename = str(memories_path / f'knn.memory.layer.{self.layer_number}.memmap'),
-                dim=self.hidden_size_per_attention_head,
-                max_memories=2048,
-                knn_use_gpu=False
-            )
+            self.memory = memory.SimpleMemory(512)
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
@@ -569,7 +555,6 @@ class ParallelSelfAttention(nn.Module):
         )
 
     def forward(self, hidden_states, attention_mask, layer_past=None):
-
         # hidden_states: [sq, b, h]
 
         # =====================
@@ -593,8 +578,8 @@ class ParallelSelfAttention(nn.Module):
 
         cur_key_layer = key_layer.clone().detach()
         cur_value_layer = value_layer.clone().detach()
-        cur_key_layer = l2norm(cur_key_layer)
-        cur_value_layer = l2norm(cur_value_layer)
+        #cur_key_layer = l2norm(cur_key_layer)
+        #cur_value_layer = l2norm(cur_value_layer)
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
@@ -646,22 +631,20 @@ class ParallelSelfAttention(nn.Module):
             context_layer = self.attention(
                 query_layer, key_layer, value_layer, layer_past, attention_mask
             )
-            if self.attention_type == "knn" and self.old_key_layer != None:
-                #[sq, b, np, hn] -> [b, np, sq, hn]
-                #queries = rearrange(query_layer, 'sq b np hn -> b np sq hn')
-
-                # b n kv d
-                #all_key_values, all_masks = self.knn_memory.search(queries, topk=32)
-                #print("all_key_values", all_key_values.shape, "all_masks", all_masks.shape)
-
+            if self.attention_type == "knn" and not self.memory.is_empty():
                 # query_layer: [sq, b, np, hn]
                 # mask: (b, np, sq, sk)
-                key_lookup, value_lookup = self.knn_lookup(
-                    query_layer, self.old_key_layer, self.old_value_layer, knn_key_count=32
-                )
+                #key_lookup, value_lookup = self.knn_lookup(
+                #    query_layer, self.old_key_layer, self.old_value_layer, knn_key_count=32
+                #)
 
-                context_layer_mem = self.knn_attention(
-                    query_layer, key_lookup, value_lookup,
+                #context_layer_mem = self.knn_attention(
+                #    query_layer, key_lookup, value_lookup,
+                #)
+
+                old_keys, old_vals, mask = self.memory.get()
+                context_layer_mem = self.attention(
+                    query_layer, old_keys, old_vals, None, None
                 )
 
                 gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
@@ -682,21 +665,8 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            if True:
-                if self.old_key_layer is None:
-                    self.old_key_layer = cur_key_layer
-                    self.old_value_layer = cur_value_layer
-                else:
-                    self.old_key_layer = torch.cat((self.old_key_layer, cur_key_layer), dim=0)[-cur_key_layer.shape[0]//2:]
-                    self.old_value_layer = torch.cat((self.old_value_layer, cur_value_layer), dim=0)[-cur_key_layer.shape[0]//2:]
-            if False:
-                # key_layer/value_layer: [sq, b, np, hn]
-                keys_to_add = rearrange(cur_key_layer, 'sq b np hn -> b (sq np) 1 hn')
-                vals_to_add = rearrange(cur_value_layer, 'sq b np hn -> b (sq np) 1 hn')
-                #[sq, b, np, hn] -> [b, np, sq, hn]
-                x = torch.cat((keys_to_add, vals_to_add), dim=2)
-                # b n kv d
-                self.knn_memory.add(x)
+            self.memory.add(cur_key_layer, cur_value_layer)
+
         # =================
         # Output. [sq, b, h]
         # =================
@@ -859,12 +829,13 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
     """Extends ParallelTransformerLayer to forward attention_mask through the pipeline. """
 
     def forward(self, args):
-        in_inference = len(args) == 4  # length of the args in inference == 4
-        in_train = len(args) == 2  # length of the args in training == 2
+        in_inference = len(args) == 5  # length of the args in inference == 5
+        in_train = len(args) == 3  # length of the args in training == 3
+
         if in_train:
-            hidden_states, attention_mask = args
+            hidden_states, input_ids, attention_mask = args
             # we are returning just [hidden_states, mask]
-            return super().forward(hidden_states, attention_mask), attention_mask
+            return super().forward(hidden_states, attention_mask), input_ids, attention_mask
         elif in_inference:
             # we are in inference
             hidden_states, layer_past, presents, attention_mask = args
@@ -882,7 +853,7 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
                     presents = torch.cat((presents, present.unsqueeze(dim=0)))
             else:
                 hidden_states = outputs
-            return hidden_states, layer_past, presents, attention_mask
+            return hidden_states, layer_past, presents, input_ids, attention_mask
         else:
             raise ValueError(
                 f"In layer {self.layer_number} - Incorrect number of arguments ({len(args)}) for {self.__class__.__name__}"
