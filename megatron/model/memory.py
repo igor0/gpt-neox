@@ -5,19 +5,57 @@ class SimpleMemory:
         self.max_entries = max_entries
         self.keys = None
         self.values = None
-        self.mask = None
+        self.eod_markers = None
 
-    def add(self, keys, values):
+    def add(self, keys, values, eod_markers):
+        """
+            keys: [sq, b, np, hn]
+            values: [sq, b, np, hn]
+            eod_markers
+        """
+
+        # record the memories
+
         if self.keys is None:
             self.keys = keys
             self.values = values
+            self.valid_from = [0] * len(eod_markers)
         else:
-            self.keys = torch.cat((self.keys, keys), dim=0)[-self.max_entries:]
-            self.values = torch.cat((self.values, values), dim=0)[-self.max_entries:]
+            self.keys = torch.cat((self.keys, keys), dim=0)
+            self.values = torch.cat((self.values, values), dim=0)
 
-    def get(self):
-        mask = None # TODO
-        return self.keys, self.values, mask
+        # invalidate any memories before the most newest EOD token
+
+        for i in range(len(eod_markers)):
+            # if there are any EOD markers, invalidate the memories up to (but excluding) the last marker
+            if eod_markers[i][0] <= eod_markers[i][1]:
+                self.valid_from[i] = self.keys.shape[0] - keys.shape[0] + eod_markers[i][1]
+
+        # drop some memories if we already have too much
+
+        if self.keys.shape[0] > self.max_entries:
+            # shift the window forward
+            removed_count = self.keys.shape[0] - self.max_entries
+            self.keys = self.keys[removed_count:]
+            self.values = self.values[removed_count:]
+
+            for i in range(len(eod_markers)):
+                self.valid_from[i] -= min(self.valid_from[i], removed_count)
+
+    def get(self, query_count, eod_markers):
+        # Mask away:
+        #    - memorized keys from before EOS
+        #    - queries from after EOS
+
+        # memory_mask: [b, sq, sk]
+        memory_mask = torch.full(size=(self.keys.shape[1], 1, query_count, self.keys.shape[0]), fill_value=True, device=self.keys.device)
+
+        for batch in range(memory_mask.shape[0]):
+            keys_valid_from = self.valid_from[batch]
+            queries_valid_to = eod_markers[batch][0]
+            memory_mask[batch][:][:queries_valid_to][keys_valid_from:] = False
+
+        return self.keys, self.values, memory_mask
 
     def is_empty(self):
         return self.keys is None

@@ -307,7 +307,7 @@ class ParallelSelfAttention(nn.Module):
             #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
             #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
             self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
-            self.memory = memory.SimpleMemory(512)
+            self.memory = memory.SimpleMemory(8192)
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
@@ -554,7 +554,7 @@ class ParallelSelfAttention(nn.Module):
             query_layer, key_layer, value_layer, attn_mask=attn_mask, rpe=rpe
         )
 
-    def forward(self, hidden_states, attention_mask, layer_past=None):
+    def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
         # hidden_states: [sq, b, h]
 
         # =====================
@@ -642,9 +642,9 @@ class ParallelSelfAttention(nn.Module):
                 #    query_layer, key_lookup, value_lookup,
                 #)
 
-                old_keys, old_vals, mask = self.memory.get()
+                old_keys, old_vals, memory_mask = self.memory.get(query_layer.shape[0], eod_markers)
                 context_layer_mem = self.attention(
-                    query_layer, old_keys, old_vals, None, None
+                    query_layer, old_keys, old_vals, None, memory_mask
                 )
 
                 gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
@@ -665,7 +665,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            self.memory.add(cur_key_layer, cur_value_layer)
+            self.memory.add(cur_key_layer, cur_value_layer, eod_markers)
 
         # =================
         # Output. [sq, b, h]
@@ -749,7 +749,7 @@ class ParallelTransformerLayer(nn.Module):
             fn = get_bias_dropout_add(self.training)
         return fn
 
-    def forward(self, x, attention_mask, layer_past=None):
+    def forward(self, x, attention_mask, eod_markers, layer_past=None):
         bias_dropout_fn = self._get_bias_dropout()
         # x: [b, s, h]
         if self.gpt_j_residual:
@@ -761,7 +761,7 @@ class ParallelTransformerLayer(nn.Module):
             # attention_output = attn(ln1(x))
             residual = x
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, layer_past=layer_past
+                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
@@ -795,7 +795,7 @@ class ParallelTransformerLayer(nn.Module):
 
             # x = x + attn(ln1(x))
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, layer_past=layer_past
+                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
@@ -833,9 +833,9 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
         in_train = len(args) == 3  # length of the args in training == 3
 
         if in_train:
-            hidden_states, input_ids, attention_mask = args
+            hidden_states, eod_markers, attention_mask = args
             # we are returning just [hidden_states, mask]
-            return super().forward(hidden_states, attention_mask), input_ids, attention_mask
+            return super().forward(hidden_states, attention_mask, eod_markers), eod_markers, attention_mask
         elif in_inference:
             # we are in inference
             hidden_states, layer_past, presents, attention_mask = args
@@ -853,7 +853,7 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
                     presents = torch.cat((presents, present.unsqueeze(dim=0)))
             else:
                 hidden_states = outputs
-            return hidden_states, layer_past, presents, input_ids, attention_mask
+            return hidden_states, layer_past, presents, eod_markers, attention_mask
         else:
             raise ValueError(
                 f"In layer {self.layer_number} - Incorrect number of arguments ({len(args)}) for {self.__class__.__name__}"

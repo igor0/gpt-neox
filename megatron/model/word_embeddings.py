@@ -34,6 +34,7 @@ class Embedding(torch.nn.Module):
         self.hidden_size = hidden_size
         self.init_method = init_method
         self.num_tokentypes = num_tokentypes
+        self.eod_id = neox_args.tokenizer.eod_id
 
         # Word embeddings (parallel).
         self.word_embeddings = mpu.VocabParallelEmbedding(
@@ -141,11 +142,25 @@ class EmbeddingPipe(Embedding):
         else:
             raise ValueError(f'Incorrect number of args passed to {self.__class__.__name__}')
 
+        eod_markers = [
+            (
+                min(
+                    (idx for idx, val in enumerate(tokens) if val == self.eod_id),
+                    default=len(tokens)
+                ),
+                max(
+                    (idx for idx, val in enumerate(tokens) if val == self.eod_id),
+                    default=0
+                )
+            )
+            for tokens in input_ids.tolist()
+        ]
+
         embeddings = super().forward(input_ids, position_ids)
         if in_inference:
-            return embeddings, layer_past, input_ids.tolist(), attention_mask
+            return embeddings, layer_past, eod_markers, attention_mask
         else:
-            return embeddings, input_ids.tolist(), attention_mask
+            return embeddings, eod_markers, attention_mask
 
 class SoftEmbedding(torch.nn.Module):
 
