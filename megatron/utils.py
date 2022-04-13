@@ -306,7 +306,6 @@ def expand_attention_types(attention_config, num_layers):
     :param params_list:
     :return:
     """
-    print("XXX", attention_config)
     # if only strings are found in the config, we assume it's already expanded
     if all([isinstance(i, str) for i in attention_config]):
         return attention_config

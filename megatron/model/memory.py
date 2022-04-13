@@ -29,10 +29,12 @@ class SimpleMemory:
         # invalidate any memories before the newest EOD token
 
         for i in range(len(eod_markers)):
+            # update the "first token"
+            self.first_token[i] = self.keys.shape[0] - keys.shape[0]
+
             # if there are any EOD markers, invalidate the memories up to (but excluding) the last marker
             if eod_markers[i][0] <= eod_markers[i][1]:
                 self.valid_from[i] = self.keys.shape[0] - keys.shape[0] + eod_markers[i][1]
-                self.first_token[i] = self.keys.shape[0] - keys.shape[0]
 
         # drop some memories if we already have too much
 
@@ -51,20 +53,23 @@ class SimpleMemory:
         #    - memorized keys from before EOS
         #    - queries from after EOS
 
-        # memory_mask: [b, sq, sk]
+        # memory_mask: [b, 1, sq, sk]
         memory_mask = torch.full(
             size=(self.keys.shape[1], 1, query_count, self.keys.shape[0]),
             fill_value=True,
             device=self.keys.device)
 
-        print("keys", len(self.keys), self.valid_from)
         for batch in range(memory_mask.shape[0]):
             keys_valid_from = self.valid_from[batch]
             queries_valid_to = eod_markers[batch][0]
-            memory_mask[batch][:][:queries_valid_to][keys_valid_from:] = False
-            memory_mask[batch][:][queries_valid_to:][:] = False
-            #print(batch, "keys (", keys_valid_from, memory_mask.shape[3], ") queries (", 0, queries_valid_to, ")")
+            memory_mask[batch,:,:queries_valid_to,keys_valid_from:] = False
+            #memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
+            memory_mask[batch,:,queries_valid_to:,:] = False
 
+        #print("Valid queries: [{},{})".format(0, queries_valid_to))
+        #print("Valid keys: [{},{})".format(keys_valid_from, memory_mask.shape[3]))
+        #print("Mask:", memory_mask.shape)
+        #print(memory_mask)
         return self.keys, self.values, memory_mask
 
     def is_empty(self):

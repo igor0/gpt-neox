@@ -84,6 +84,7 @@ class Embedding(torch.nn.Module):
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
         self.dummy = nn.Parameter(torch.ones(1))
+        self.tokenizer = neox_args.tokenizer
 
     def add_tokentype_embeddings(self, num_tokentypes):
         """Add token-type embedding. This function is provided so we can add
@@ -142,6 +143,16 @@ class EmbeddingPipe(Embedding):
         else:
             raise ValueError(f'Incorrect number of args passed to {self.__class__.__name__}')
 
+        all_eod_markers = [
+            [
+                idx for idx, val in enumerate(tokens) if val == self.eod_id
+            ]
+            for tokens in input_ids.tolist()
+        ]
+        #print("#########################################")
+        #print(self.tokenizer.detokenize(input_ids[0].tolist()))
+        #print("#########################################")
+        #print("EOD", all_eod_markers)
         eod_markers = [
             (
                 min(

@@ -307,7 +307,7 @@ class ParallelSelfAttention(nn.Module):
             #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
             #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
             self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
-            self.memory = memory.SimpleMemory(4096)
+            self.memory = memory.SimpleMemory(8192)
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
@@ -628,28 +628,40 @@ class ParallelSelfAttention(nn.Module):
             present = torch.stack((key_layer, value_layer))
 
         if not self.sparse:
-            context_layer = self.attention(
-                query_layer, key_layer, value_layer, layer_past, attention_mask
-            )
-            if self.attention_type == "knn" and not self.memory.is_empty():
-                # query_layer: [sq, b, np, hn]
-                # mask: (b, np, sq, sk)
-                #key_lookup, value_lookup = self.knn_lookup(
-                #    query_layer, self.old_key_layer, self.old_value_layer, knn_key_count=32
-                #)
-
-                #context_layer_mem = self.knn_attention(
-                #    query_layer, key_lookup, value_lookup,
-                #)
-
-                old_keys, old_vals, memory_mask = self.memory.get(query_layer.shape[0], eod_markers)
-                context_layer_mem = self.attention(
-                    query_layer, old_keys, old_vals, None, memory_mask
+            if self.attention_type != "knn" or self.memory.is_empty():
+                context_layer = self.attention(
+                    query_layer, key_layer, value_layer, layer_past, attention_mask
                 )
+            elif self.attention_type == "knn" and not self.memory.is_empty():
+                if True:
+                    # Concat memories with attention
+                    old_keys, old_vals, memory_mask = self.memory.get(query_layer.shape[0], eod_markers)
+                    context_layer = self.attention(
+                        query_layer,
+                        torch.cat((old_keys, key_layer)),
+                        torch.cat((old_vals, value_layer)),
+                        None,
+                        torch.cat((memory_mask, attention_mask.expand(memory_mask.shape[0],-1,-1,-1)), dim=3)
+                    )
+                elif False:
+                    # Use sigmoid to combine memories with attention
 
-                #gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                #context_layer = context_layer * gate + context_layer_mem * (1 - gate)
-                context_layer = context_layer + context_layer_mem
+                    gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
+                    context_layer = context_layer * gate + context_layer_mem * (1 - gate)
+                else:
+                    # Use KNN lookup
+
+                    # query_layer: [sq, b, np, hn]
+                    # mask: (b, np, sq, sk)
+                    key_lookup, value_lookup = self.knn_lookup(
+                        query_layer, self.old_key_layer, self.old_value_layer, knn_key_count=32
+                    )
+
+                    context_layer_mem = self.knn_attention(
+                        query_layer, key_lookup, value_lookup,
+                    )
+                    context_layer = context_layer + context_layer_mem
+
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask
