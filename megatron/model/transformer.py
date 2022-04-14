@@ -32,6 +32,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from megatron import mpu
 from megatron.model.fused_softmax import FusedScaleMaskSoftmax
+from megatron.model.init_functions import small_init_init_method
 from megatron.model.activations import get_activation
 from megatron.model.utils import exists
 from megatron.model.positional_embeddings import (
@@ -306,8 +307,17 @@ class ParallelSelfAttention(nn.Module):
             #self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
             #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
             #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
-            self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
-            self.memory = memory.SimpleMemory(8192)
+            #self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
+            self.memory = memory.SimpleMemory(4096)
+
+            self.memory_key_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
+            self.memory_value_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
+
+            #nn.init.eye_(self.memory_key_transform.weight)
+            #nn.init.eye_(self.memory_value_transform.weight)
+            init = small_init_init_method(neox_args.hidden_size)
+            init(self.memory_key_transform.weight)
+            init(self.memory_value_transform.weight)
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
@@ -636,6 +646,17 @@ class ParallelSelfAttention(nn.Module):
                 if True:
                     # Concat memories with attention
                     old_keys, old_vals, memory_mask = self.memory.get(query_layer.shape[0], eod_markers)
+
+                    sq = old_keys.shape[2]
+                    old_keys = rearrange(old_keys, 'b np sq sk -> b np (sq sk)')
+                    old_vals = rearrange(old_vals, 'b np sq sk -> b np (sq sk)')
+
+                    old_keys = self.memory_key_transform(old_keys)
+                    old_vals = self.memory_value_transform(old_vals)
+
+                    old_keys = rearrange(old_keys, 'b np (sq sk) -> b np sq sk', sq=sq)
+                    old_vals = rearrange(old_vals, 'b np (sq sk) -> b np sq sk', sq=sq)
+
                     context_layer = self.attention(
                         query_layer,
                         torch.cat((old_keys, key_layer)),

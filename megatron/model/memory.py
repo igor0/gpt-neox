@@ -63,8 +63,7 @@ class SimpleMemory:
             keys_valid_from = self.valid_from[batch]
             queries_valid_to = eod_markers[batch][0]
             memory_mask[batch,:,:queries_valid_to,keys_valid_from:] = False
-            #memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
-            memory_mask[batch,:,queries_valid_to:,:] = False
+            memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
 
         #print("Valid queries: [{},{})".format(0, queries_valid_to))
         #print("Valid keys: [{},{})".format(keys_valid_from, memory_mask.shape[3]))
