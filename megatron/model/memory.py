@@ -1,15 +1,20 @@
 import torch
 
-class SimpleMemory:
+class MemoryStore:
     def __init__(self, memory_size, memory_invalid_query_mode):
         self.memory_size = memory_size
+        self.memory_invalid_query_mode = memory_invalid_query_mode
         self.keys = None
         self.values = None
-        self.eod_markers = None
         self.first_token = None
-        self.memory_invalid_query_mode = memory_invalid_query_mode
 
-    def add(self, keys, values, eod_markers):
+    def _move_to(self, device):
+        if self.keys is not None:
+            self.keys = self.keys.to(device)
+            self.values = self.values.to(device)
+
+
+    def add(self, is_training, keys, values, eod_markers):
         """
             keys: [sq, b, np, hn]
             values: [sq, b, np, hn]
@@ -49,7 +54,7 @@ class SimpleMemory:
                 self.valid_from[i] -= min(self.valid_from[i], removed_count)
                 self.first_token[i] -= removed_count
 
-    def get(self, query_count, eod_markers):
+    def get(self, is_training, query_count, eod_markers):
         # Mask away:
         #    - memorized keys from before EOS
         #    - queries from after EOS
@@ -76,4 +81,26 @@ class SimpleMemory:
 
     def is_empty(self):
         return self.keys is None
+
+class SimpleMemory:
+    def __init__(self, device, memory_size, memory_invalid_query_mode):
+        self.device = device
+
+        self.training = True
+
+        self.store = MemoryStore(memory_size, memory_invalid_query_mode)
+        self.inactive_store = MemoryStore(memory_size, memory_invalid_query_mode)
+
+    def get_store(self, training):
+        if training != self.training:
+            # swap out the memory stores
+
+            self.inactive_store, self.store = self.store, self.inactive_store
+
+            self.inactive_store._move_to(torch.device('cpu'))
+            self.store._move_to(self.device)
+
+            self.training = training
+
+        return self.store
 

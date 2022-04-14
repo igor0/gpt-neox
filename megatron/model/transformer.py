@@ -308,7 +308,10 @@ class ParallelSelfAttention(nn.Module):
             self.memory_kv_transform = neox_args.memory_kv_transform
             self.memory_attn_mode = neox_args.memory_attn_mode
 
-            self.memory = memory.SimpleMemory(neox_args.memory_size, neox_args.memory_invalid_query_mode)
+            # TODO: is the device guaranteed to be known at this point?
+            device = torch.cuda.current_device()
+
+            self.memory = memory.SimpleMemory(device, neox_args.memory_size, neox_args.memory_invalid_query_mode)
 
             if neox_args.memory_embed_key:
                 self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
@@ -321,8 +324,8 @@ class ParallelSelfAttention(nn.Module):
                     self.memory_key_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
                     self.memory_value_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
                 elif neox_args.memory_kv_transform == "tied":
-                    self.memory_key_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size_per_attention_head, bias=False)
-                    self.memory_value_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size_per_attention_head, bias=False)
+                    self.memory_key_transform = nn.Linear(self.hidden_size_per_attention_head, self.hidden_size_per_attention_head, bias=False)
+                    self.memory_value_transform = nn.Linear(self.hidden_size_per_attention_head, self.hidden_size_per_attention_head, bias=False)
                 else:
                     raise BaseException("Unknown memory_kv_transform", neox_args.memory_kv_transform)
 
@@ -657,14 +660,16 @@ class ParallelSelfAttention(nn.Module):
         if self.get_key_value:
             present = torch.stack((key_layer, value_layer))
 
+        mem_store = self.memory.get_store(self.training) if self.attention_type == "knn" else None
+
         if not self.sparse:
-            if self.attention_type != "knn" or self.memory.is_empty():
+            if self.attention_type != "knn" or mem_store.is_empty():
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask
                 )
-            elif self.attention_type == "knn" and not self.memory.is_empty():
+            elif self.attention_type == "knn" and not mem_store.is_empty():
                 # Extract keys and values from memory
-                old_keys, old_vals, memory_mask = self.memory.get(query_layer.shape[0], eod_markers)
+                old_keys, old_vals, memory_mask = mem_store.get(self.training, query_layer.shape[0], eod_markers)
 
                 if self.memory_kv_transform is not None:
                     if self.memory_kv_transform == "untied":
@@ -729,7 +734,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            self.memory.add(cur_key_layer, cur_value_layer, eod_markers)
+            mem_store.add(self.training, cur_key_layer, cur_value_layer, eod_markers)
 
         # =================
         # Output. [sq, b, h]
