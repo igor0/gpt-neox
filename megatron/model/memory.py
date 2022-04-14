@@ -4,15 +4,17 @@ class MemoryStore:
     def __init__(self, memory_size, memory_invalid_query_mode):
         self.memory_size = memory_size
         self.memory_invalid_query_mode = memory_invalid_query_mode
-        self.keys = None
-        self.values = None
-        self.first_token = None
+        self._clear()
 
     def _move_to(self, device):
         if self.keys is not None:
             self.keys = self.keys.to(device)
             self.values = self.values.to(device)
 
+    def _clear(self):
+        self.keys = None
+        self.values = None
+        self.first_token = None
 
     def add(self, is_training, keys, values, eod_markers):
         """
@@ -93,14 +95,17 @@ class SimpleMemory:
 
     def get_store(self, training):
         if training != self.training:
-            # swap out the memory stores
-
+            # swap out the memory stores (training or evaluation)
             self.inactive_store, self.store = self.store, self.inactive_store
 
+            # move the active store to the GPU and the inactive one to the CPU
             self.inactive_store._move_to(torch.device('cpu'))
             self.store._move_to(self.device)
 
             self.training = training
+            if self.training:
+                # Clear the evaluation memory at the end of each evaluation cycle
+                self.inactive_store._clear()
 
         return self.store
 
