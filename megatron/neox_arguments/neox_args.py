@@ -984,7 +984,7 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     """
     Whether and how to transform the keys and values after retrieval from memory
 
-    Possible values: "untied" | "tied"| | None
+    Possible values: "untied" | "tied"| None
     """
 
     memory_kv_transform_init: str = "small_init"

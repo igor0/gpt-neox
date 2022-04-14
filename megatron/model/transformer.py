@@ -329,12 +329,12 @@ class ParallelSelfAttention(nn.Module):
                 if neox_args.memory_kv_transform_init == "eye_init":
                     memory_kv_init = nn.init.eye_
                 elif neox_args.memory_kv_transform_init == "small_init":
-                    init = small_init_init_method(neox_args.hidden_size)
+                    memory_kv_init = small_init_init_method(neox_args.hidden_size)
                 else:
                     raise BaseException("Unknown memory_kv_transform_init", neox_args.memory_kv_transform_init)
 
-                init(self.memory_key_transform.weight)
-                init(self.memory_value_transform.weight)
+                memory_kv_init(self.memory_key_transform.weight)
+                memory_kv_init(self.memory_value_transform.weight)
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
