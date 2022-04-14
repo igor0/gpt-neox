@@ -1,12 +1,13 @@
 import torch
 
 class SimpleMemory:
-    def __init__(self, max_entries):
-        self.max_entries = max_entries
+    def __init__(self, memory_size, memory_invalid_query_mode):
+        self.memory_size = memory_size
         self.keys = None
         self.values = None
         self.eod_markers = None
         self.first_token = None
+        self.memory_invalid_query_mode = memory_invalid_query_mode
 
     def add(self, keys, values, eod_markers):
         """
@@ -38,9 +39,9 @@ class SimpleMemory:
 
         # drop some memories if we already have too much
 
-        if self.keys.shape[0] > self.max_entries:
+        if self.keys.shape[0] > self.memory_size:
             # shift the window forward
-            removed_count = self.keys.shape[0] - self.max_entries
+            removed_count = self.keys.shape[0] - self.memory_size
             self.keys = self.keys[removed_count:]
             self.values = self.values[removed_count:]
 
@@ -63,12 +64,14 @@ class SimpleMemory:
             keys_valid_from = self.valid_from[batch]
             queries_valid_to = eod_markers[batch][0]
             memory_mask[batch,:,:queries_valid_to,keys_valid_from:] = False
-            memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
 
-        #print("Valid queries: [{},{})".format(0, queries_valid_to))
-        #print("Valid keys: [{},{})".format(keys_valid_from, memory_mask.shape[3]))
-        #print("Mask:", memory_mask.shape)
-        #print(memory_mask)
+            if self.memory_invalid_query_mode == "first_token":
+                memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
+            elif self.memory_invalid_query_mode == "all_tokens":
+                memory_mask[batch,:,queries_valid_to:,:] = False
+            else:
+                raise BaseException("Invalid memory_invalid_query_mode value", self.memory_invalid_query_mode)
+
         return self.keys, self.values, memory_mask
 
     def is_empty(self):

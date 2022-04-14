@@ -304,20 +304,37 @@ class ParallelSelfAttention(nn.Module):
         )
 
         if self.attention_type == "knn":
-            #self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
-            #self.knn_embed_key = nn.Parameter(torch.randn(self.hidden_size_per_attention_head))
-            #self.combine_attn_output_gate = nn.Parameter(torch.zeros(neox_args.num_attention_heads, 1, 1))
-            #self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
-            self.memory = memory.SimpleMemory(4096)
+            self.memory_kv_normalize = neox_args.memory_kv_normalize
+            self.memory_kv_transform = neox_args.memory_kv_transform
+            self.memory_attn_mode = neox_args.memory_attn_mode
 
-            self.memory_key_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
-            self.memory_value_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
+            self.memory = memory.SimpleMemory(neox_args.memory_size, neox_args.memory_invalid_query_mode)
 
-            #nn.init.eye_(self.memory_key_transform.weight)
-            #nn.init.eye_(self.memory_value_transform.weight)
-            init = small_init_init_method(neox_args.hidden_size)
-            init(self.memory_key_transform.weight)
-            init(self.memory_value_transform.weight)
+            if neox_args.memory_embed_key:
+                self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
+
+            if neox_args.memory_attn_mode == "sigmoid":
+                self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
+
+            if neox_args.memory_kv_transform != None:
+                if neox_args.memory_kv_transform == "untied":
+                    self.memory_key_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
+                    self.memory_value_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
+                elif neox_args.memory_kv_transform == "tied":
+                    self.memory_key_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size_per_attention_head, bias=False)
+                    self.memory_value_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size_per_attention_head, bias=False)
+                else:
+                    raise BaseException("Unknown memory_kv_transform", neox_args.memory_kv_transform)
+
+                if neox_args.memory_kv_transform_init == "eye_init":
+                    memory_kv_init = nn.init.eye_
+                elif neox_args.memory_kv_transform_init == "small_init":
+                    init = small_init_init_method(neox_args.hidden_size)
+                else:
+                    raise BaseException("Unknown memory_kv_transform_init", neox_args.memory_kv_transform_init)
+
+                init(self.memory_key_transform.weight)
+                init(self.memory_value_transform.weight)
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
@@ -586,10 +603,13 @@ class ParallelSelfAttention(nn.Module):
             mixed_x_layer, 3
         )
 
-        cur_key_layer = key_layer.clone().detach()
-        cur_value_layer = value_layer.clone().detach()
-        #cur_key_layer = l2norm(cur_key_layer)
-        #cur_value_layer = l2norm(cur_value_layer)
+        if self.attention_type == "knn":
+            cur_key_layer = key_layer.clone().detach()
+            cur_value_layer = value_layer.clone().detach()
+
+            if self.memory_kv_normalize:
+                cur_key_layer = l2norm(cur_key_layer)
+                cur_value_layer = l2norm(cur_value_layer)
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
@@ -643,20 +663,28 @@ class ParallelSelfAttention(nn.Module):
                     query_layer, key_layer, value_layer, layer_past, attention_mask
                 )
             elif self.attention_type == "knn" and not self.memory.is_empty():
-                if True:
+                # Extract keys and values from memory
+                old_keys, old_vals, memory_mask = self.memory.get(query_layer.shape[0], eod_markers)
+
+                if self.memory_kv_transform is not None:
+                    if self.memory_kv_transform == "untied":
+                        kv_sq = old_keys.shape[2]
+                        old_keys = rearrange(old_keys, 'b np sq sk -> b np (sq sk)')
+                        old_vals = rearrange(old_vals, 'b np sq sk -> b np (sq sk)')
+
+                        old_keys = self.memory_key_transform(old_keys)
+                        old_vals = self.memory_value_transform(old_vals)
+
+                        old_keys = rearrange(old_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                        old_vals = rearrange(old_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                    elif self.memory_kv_transform == "tied":
+                        old_keys = self.memory_key_transform(old_keys)
+                        old_vals = self.memory_value_transform(old_vals)
+                    else:
+                        raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
+
+                if self.memory_attn_mode == "concat":
                     # Concat memories with attention
-                    old_keys, old_vals, memory_mask = self.memory.get(query_layer.shape[0], eod_markers)
-
-                    sq = old_keys.shape[2]
-                    old_keys = rearrange(old_keys, 'b np sq sk -> b np (sq sk)')
-                    old_vals = rearrange(old_vals, 'b np sq sk -> b np (sq sk)')
-
-                    old_keys = self.memory_key_transform(old_keys)
-                    old_vals = self.memory_value_transform(old_vals)
-
-                    old_keys = rearrange(old_keys, 'b np (sq sk) -> b np sq sk', sq=sq)
-                    old_vals = rearrange(old_vals, 'b np (sq sk) -> b np sq sk', sq=sq)
-
                     context_layer = self.attention(
                         query_layer,
                         torch.cat((old_keys, key_layer)),
@@ -664,24 +692,26 @@ class ParallelSelfAttention(nn.Module):
                         None,
                         torch.cat((memory_mask, attention_mask.expand(memory_mask.shape[0],-1,-1,-1)), dim=3)
                     )
-                elif False:
+                elif self.memory_attn_mode == "sigmoid":
+                    mem_context_layer = self.attention(
+                        query_layer,
+                        old_keys,
+                        old_vals,
+                        None,
+                        torch.cat(memory_mask))
+
+                    local_context_layer = self.attention(
+                        query_layer,
+                        key_layer,
+                        value_layer,
+                        None,
+                        attention_mask)
+
                     # Use sigmoid to combine memories with attention
-
                     gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                    context_layer = context_layer * gate + context_layer_mem * (1 - gate)
+                    context_layer = local_context_layer * gate + mem_context_layer * (1 - gate)
                 else:
-                    # Use KNN lookup
-
-                    # query_layer: [sq, b, np, hn]
-                    # mask: (b, np, sq, sk)
-                    key_lookup, value_lookup = self.knn_lookup(
-                        query_layer, self.old_key_layer, self.old_value_layer, knn_key_count=32
-                    )
-
-                    context_layer_mem = self.knn_attention(
-                        query_layer, key_lookup, value_lookup,
-                    )
-                    context_layer = context_layer + context_layer_mem
+                    raise BaseException("Unknown memory_attn_mode", neox_args.memory_attn_mode)
 
         else:
             context_layer = self.sparse_attention(

@@ -972,3 +972,48 @@ class NeoXArgsPythia(NeoXArgsTemplate):
     """
     Only parameters whose names match the provided regular expression will be trained; all other parameters will be frozen.
     """
+
+@dataclass
+class NeoXArgsMemory(NeoXArgsTemplate):
+    memory_kv_normalize: bool = True
+    """
+    Whether to normalize the keys and values before inserting into memory.
+    """
+
+    memory_kv_transform: str = "untied"
+    """
+    Whether and how to transform the keys and values after retrieval from memory
+
+    Possible values: "untied" | "tied"| | None
+    """
+
+    memory_kv_transform_init: str = "small_init"
+    """
+    How to initialize the memory_kv_transform weight matrix if untrained.
+
+    Possible values: "small_init" | "eye_init"
+    """
+
+    memory_attn_mode: str = "concat"
+    """
+    How to combine local attention with distant attention.
+
+    Possible values: "concat" | "sigmoid"
+    """
+
+    memory_size: int = 4096
+    """
+    Size of memory at training time, in tokens.
+    """
+
+    memory_invalid_query_mode = "first_token"
+    """
+    How to populate the attention mask for tokens that follow an EOD token.
+
+    Possible values: "first_token" | "all_tokens"
+    """
+
+    memory_embed_key = False
+    """
+    Whether to add a trained embedding to retrieved keys.
+    """
