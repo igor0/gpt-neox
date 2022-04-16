@@ -3,6 +3,10 @@ import pickle
 import warnings
 
 class MemoryDumper:
+    """
+    Utility to dump memory records into a file.
+    """
+
     def __init__(self, file_name_base, header={}, file_bytes_goal=100*1024*1024, file_limit=10, save_file_func=None):
         self.file_name_base = file_name_base
         self.file_bytes_goal = file_bytes_goal

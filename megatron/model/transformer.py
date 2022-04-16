@@ -25,12 +25,12 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
-from . import mem
 from .norms import get_norm
 
 from einops import rearrange
 from contextlib import contextmanager
 from pathlib import Path
+from megatron import memorize
 from megatron import mpu
 from megatron.model.fused_softmax import FusedScaleMaskSoftmax
 from megatron.model.init_functions import small_init_init_method
@@ -317,12 +317,12 @@ class ParallelSelfAttention(nn.Module):
                 def init_dumper(training):
                     train_or_eval = "train" if training else "eval"
                     mem_file_path = os.path.join(neox_args.memory_save, f'layer.{layer_number}.{train_or_eval}.pkl')
-                    return mem.MemoryDumper(mem_file_path)
+                    return memorize.MemoryDumper(mem_file_path)
                 memory_dumper_init = init_dumper
             else:
                 memory_dumper_init = None
 
-            self.memory = mem.SimpleMemory(
+            self.memory = memorize.SimpleMemory(
                 device,
                 neox_args.memory_size,
                 neox_args.memory_invalid_query_mode,

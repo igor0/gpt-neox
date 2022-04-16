@@ -1,7 +1,31 @@
 import torch
 
 class MemoryStore:
+    """
+    Storage of key-value memories in a single transformer layer.
+    """
+
     def __init__(self, memory_size, memory_invalid_query_mode, memory_dumper=None):
+        """
+        memory_size:
+            Number of key/value pairs (per batch & attention head) to retain
+
+        memory_invalid_query_mode:
+            How to populate the memory attention mask for queries that are past an EOD token in the
+            current context and thus shouldn't have access to memories:
+            
+                * "first_token" attends to the latest token that was a first token in some context.
+                  Due to causal attention, the first token in a context carries the least meaning.
+                  Also, likely for related reasons, inactive attention heads are known to park
+                  themselves on the first token. Empirically, this approach seems to work quite
+                  well.
+
+                * "all_tokens" attends to all tokens in memory uniformly
+
+        memory_dumper:
+            Optional MemoryDumper to persist any memories added to the MemoryStore.
+        """
+
         self.memory_size = memory_size
         self.memory_invalid_query_mode = memory_invalid_query_mode
         self.memory_dumper = memory_dumper
@@ -98,6 +122,11 @@ class MemoryStore:
         return self.keys is None
 
 class SimpleMemory:
+    """
+    Tracks two memory stores - one for training and one for evaluation - and switches between
+    them as needed.
+    """
+
     def __init__(self, device, memory_size, memory_invalid_query_mode, memory_dumper_init=None):
         self.device = device
 
