@@ -1017,3 +1017,15 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     """
     Whether to add a trained embedding to retrieved keys.
     """
+
+    memory_save = None
+    """
+    Location to store memories.
+    """
+
+    memory_load = None
+    """
+    Location from where to load previously stored memories.
+    """
+
+    memory_flags: str = ""

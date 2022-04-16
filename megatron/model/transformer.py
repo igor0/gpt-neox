@@ -311,7 +311,16 @@ class ParallelSelfAttention(nn.Module):
             # TODO: is the device guaranteed to be known at this point?
             device = torch.cuda.current_device()
 
-            self.memory = memory.SimpleMemory(device, neox_args.memory_size, neox_args.memory_invalid_query_mode)
+            if neox_args.memory_save:
+                mem_pickler = MemoryPickler(os.path.join(neox_args.memory_save, f'layer.{layer_number}.pkl', 100*1024*1024))
+            else:
+                mem_pickler = None
+
+            self.memory = memory.SimpleMemory(
+                device,
+                neox_args.memory_size,
+                neox_args.memory_invalid_query_mode,
+                memory_pickler = mem_pickler)
 
             if neox_args.memory_embed_key:
                 self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
@@ -338,6 +347,11 @@ class ParallelSelfAttention(nn.Module):
 
                 memory_kv_init(self.memory_key_transform.weight)
                 memory_kv_init(self.memory_value_transform.weight)
+
+            if "memory_key_bias_48" in neox_args.memory_flags:
+                self.memory_key_bias = torch.nn.Parameter(torch.rand(neox_args.num_attention_heads, self.hidden_size_per_attention_head, dtype=torch.float16).cuda()/48)
+            else:
+                self.memory_key_bias = None
 
     def knn_lookup(
         self, query_layer, key_layer, value_layer, knn_key_count
@@ -690,6 +704,7 @@ class ParallelSelfAttention(nn.Module):
 
                 if self.memory_attn_mode == "concat":
                     # Concat memories with attention
+                    old_keys = old_keys + self.memory_key_bias
                     context_layer = self.attention(
                         query_layer,
                         torch.cat((old_keys, key_layer)),
