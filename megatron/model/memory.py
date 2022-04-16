@@ -26,7 +26,7 @@ class MemoryStore:
 
         # save the memories to the file, if requested
 
-        if self.memory_picker is not None:
+        if self.memory_pickler is not None:
             self.memory_pickler.dump([
                 keys.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]),
                 values.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]),
