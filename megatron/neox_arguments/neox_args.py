@@ -1013,17 +1013,12 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     Possible values: "first_token" | "all_tokens"
     """
 
-    memory_embed_key = False
-    """
-    Whether to add a trained embedding to retrieved keys.
-    """
-
-    memory_save = None
+    memory_save: str = None
     """
     Location to store memories.
     """
 
-    memory_load = None
+    memory_load: str = None
     """
     Location from where to load previously stored memories.
     """

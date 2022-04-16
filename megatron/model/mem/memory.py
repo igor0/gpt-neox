@@ -1,10 +1,10 @@
 import torch
 
 class MemoryStore:
-    def __init__(self, memory_size, memory_invalid_query_mode, memory_pickler=None):
+    def __init__(self, memory_size, memory_invalid_query_mode, memory_dumper=None):
         self.memory_size = memory_size
         self.memory_invalid_query_mode = memory_invalid_query_mode
-        self.memory_pickler = memory_pickler
+        self.memory_dumper = memory_dumper
         self._clear()
 
     def _move_to(self, device):
@@ -17,6 +17,10 @@ class MemoryStore:
         self.values = None
         self.first_token = None
 
+    def _sync(self):
+        if self.memory_dumper is not None:
+            self.memory_dumper.sync()
+
     def add(self, is_training, keys, values, eod_markers):
         """
             keys: [sq, b, np, hn]
@@ -26,8 +30,8 @@ class MemoryStore:
 
         # save the memories to the file, if requested
 
-        if self.memory_pickler is not None:
-            self.memory_pickler.dump([
+        if self.memory_dumper is not None:
+            self.memory_dumper.dump([
                 keys.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]),
                 values.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]),
             ])
@@ -94,13 +98,13 @@ class MemoryStore:
         return self.keys is None
 
 class SimpleMemory:
-    def __init__(self, device, memory_size, memory_invalid_query_mode, memory_pickler=None):
+    def __init__(self, device, memory_size, memory_invalid_query_mode, memory_dumper_init=None):
         self.device = device
 
         self.training = True
 
-        self.store = MemoryStore(memory_size, memory_invalid_query_mode, memory_pickler)
-        self.inactive_store = MemoryStore(memory_size, memory_invalid_query_mode, memory_pickler)
+        self.store = MemoryStore(memory_size, memory_invalid_query_mode, memory_dumper_init(self.training))
+        self.inactive_store = MemoryStore(memory_size, memory_invalid_query_mode, memory_dumper_init(not self.training))
 
     def get_store(self, training):
         if training != self.training:
@@ -111,50 +115,12 @@ class SimpleMemory:
             self.inactive_store._move_to(torch.device('cpu'))
             self.store._move_to(self.device)
 
+            # sync the inactive store (if dumping to file)
+            self.inactive_store._sync()
+
             self.training = training
             if self.training:
                 # Clear the evaluation memory at the end of each evaluation cycle
                 self.inactive_store._clear()
 
         return self.store
-
-class MemoryPickler:
-    def __init__(self, file_name_base, file_bytes_goal, save_file_func=None):
-        self.file_name_base = file_name_base
-        self.file_bytes_goal = file_bytes_goal
-        self.save_file_func = save_file_func
-
-    def dump(self, record):
-        # if the current batch is full, close it
-        if self.file is not None and self.file.tell() > self.file_bytes_goal:
-            self.close()
-
-        # if there is no open batch, create a new one
-        if self.file is None:
-            self.cur_file_name = "{}.{}".format(self.file_name_base, self.next_file_idx)
-            self.file = open(self.cur_file_name, 'wb')
-            self.next_file_idx = self.next_file_idx + 1
-
-        # pickle the record into the current batch
-        pickle.dump(record, self.file)
-
-    def close(self):
-        if self.file != None:
-            # close the file
-            self.file.close()
-            self.file = None
-
-            # compress and upload the file
-            if self.save_file_func is not None:
-                self.save_file_func(self.cur_file_name)
-                if self.cur_file_name and os.path.exists(self.cur_file_name):
-                    os.remove(self.cur_file_name)
-
-            # mark the batch as finished
-            self.cur_file_name = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()

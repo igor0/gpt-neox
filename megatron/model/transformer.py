@@ -20,11 +20,12 @@
 
 import math
 import numpy as np
+import os
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
 
-from . import memory
+from . import mem
 from .norms import get_norm
 
 from einops import rearrange
@@ -312,18 +313,20 @@ class ParallelSelfAttention(nn.Module):
             device = torch.cuda.current_device()
 
             if neox_args.memory_save:
-                mem_pickler = MemoryPickler(os.path.join(neox_args.memory_save, f'layer.{layer_number}.pkl', 100*1024*1024))
+                Path(neox_args.memory_save).mkdir(exist_ok = True, parents = True)
+                def init_dumper(training):
+                    train_or_eval = "train" if training else "eval"
+                    mem_file_path = os.path.join(neox_args.memory_save, f'layer.{layer_number}.{train_or_eval}.pkl')
+                    return mem.MemoryDumper(mem_file_path)
+                memory_dumper_init = init_dumper
             else:
-                mem_pickler = None
+                memory_dumper_init = None
 
-            self.memory = memory.SimpleMemory(
+            self.memory = mem.SimpleMemory(
                 device,
                 neox_args.memory_size,
                 neox_args.memory_invalid_query_mode,
-                memory_pickler = mem_pickler)
-
-            if neox_args.memory_embed_key:
-                self.knn_embed_key = nn.Parameter(torch.randn(neox_args.num_attention_heads, self.hidden_size_per_attention_head))
+                memory_dumper_init = memory_dumper_init)
 
             if neox_args.memory_attn_mode == "sigmoid":
                 self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
