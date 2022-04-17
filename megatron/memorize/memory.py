@@ -52,6 +52,8 @@ class MemoryStore:
             eod_markers
         """
 
+        #print("XXX", "memory add", keys.shape, values.shape, len(eod_markers))
+
         # save the memories to the file, if requested
 
         if self.memory_dumper is not None:
@@ -131,6 +133,9 @@ class SimpleMemory:
         self.device = device
 
         self.training = True
+
+        if memory_dumper_init is None:
+            memory_dumper_init = lambda training: None
 
         self.store = MemoryStore(memory_size, memory_invalid_query_mode, memory_dumper_init(self.training))
         self.inactive_store = MemoryStore(memory_size, memory_invalid_query_mode, memory_dumper_init(not self.training))

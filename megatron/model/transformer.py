@@ -48,6 +48,7 @@ from megatron.model.fused_bias_dropout import (
     bias_dropout_add_fused_inference,
 )
 from megatron.model.utils import configure_sparse_attention
+from megatron.memorize.paths import get_mem_dump_path
 
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
@@ -315,9 +316,17 @@ class ParallelSelfAttention(nn.Module):
             if neox_args.memory_save:
                 Path(neox_args.memory_save).mkdir(exist_ok = True, parents = True)
                 def init_dumper(training):
-                    train_or_eval = "train" if training else "eval"
-                    mem_file_path = os.path.join(neox_args.memory_save, f'layer.{layer_number}.{train_or_eval}.pkl')
-                    return memorize.MemoryDumper(mem_file_path)
+                    if training:
+                        # When memory_save is set, we should only dump during eval, not during
+                        # training.
+                        return None
+
+                    mem_file = get_mem_dump_path(neox_args.memory_save, layer_number)
+                    header = {
+                        "dim": self.hidden_size_per_attention_head,
+                        "heads": self.num_attention_heads_per_partition,
+                    }
+                    return memorize.MemoryDumper(mem_file, header)
                 memory_dumper_init = init_dumper
             else:
                 memory_dumper_init = None
