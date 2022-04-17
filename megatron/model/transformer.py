@@ -322,11 +322,11 @@ class ParallelSelfAttention(nn.Module):
                         return None
 
                     mem_file = get_mem_dump_path(neox_args.memory_save, layer_number)
-                    header = {
-                        "dim": self.hidden_size_per_attention_head,
-                        "heads": self.num_attention_heads_per_partition,
-                    }
-                    return memorize.MemoryDumper(mem_file, header)
+                    return memorize.MemoryDumper(
+                        mem_file,
+                        dim=self.hidden_size_per_attention_head,
+                        heads=self.num_attention_heads_per_partition
+                    )
                 memory_dumper_init = init_dumper
             else:
                 memory_dumper_init = None
@@ -934,11 +934,12 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
             return super().forward(hidden_states, attention_mask, eod_markers), eod_markers, attention_mask
         elif in_inference:
             # we are in inference
-            hidden_states, layer_past, presents, attention_mask = args
+            hidden_states, layer_past, presents, eod_markers, attention_mask = args
+
             past = torch.Tensor()
             if layer_past is not None and layer_past.numel() > 0:
                 past = layer_past[self.layer_number]
-            outputs = super().forward(hidden_states, attention_mask, layer_past=past)
+            outputs = super().forward(hidden_states, attention_mask, eod_markers, layer_past=past)
 
             if self.get_key_value:
                 # outputs = [hidden_states, present]

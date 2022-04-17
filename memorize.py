@@ -18,24 +18,23 @@
 
 from megatron.utils import print_rank_0, setup_for_inference_or_eval
 
-from megatron.memorize.memorize_utils import memorize
+from megatron.memorize.memorize_utils import memorize_from_file
 
 def main():
     """
     Generate text/sample model
     """
     model, neox_args = setup_for_inference_or_eval()
-    if neox_args.text_gen_type == 'input-file':
-        print_rank_0(f'Memorizing from input file {neox_args.sample_input_file}')
-        assert neox_args.sample_input_file is not None
-        memorize_from_file(
-            neox_args=neox_args,
-            model=model,
-            input_file=neox_args.sample_input_file,
-        )
 
-    else:
-        raise ValueError(f"`text-gen-type` either not specified or not recognised: {neox_args.text_gen_type}")
+    print_rank_0(f'Memorizing from input file {neox_args.memorize_input_file}')
+    if neox_args.memorize_input_file is None:
+        raise ValueError(f"`memorize_input_file` is not specified.")
+
+    memorize_from_file(
+        neox_args=neox_args,
+        model=model,
+        input_file=neox_args.memorize_input_file,
+    )
 
 if __name__ == "__main__":
     main()

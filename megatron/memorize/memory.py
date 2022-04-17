@@ -52,7 +52,7 @@ class MemoryStore:
             eod_markers
         """
 
-        #print("XXX", "memory add", keys.shape, values.shape, len(eod_markers))
+        print("XXX", "memory add", keys.shape, values.shape, len(eod_markers))
 
         # save the memories to the file, if requested
 

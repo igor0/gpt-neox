@@ -1024,3 +1024,11 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     """
 
     memory_flags: str = ""
+    """
+    Any additional flags to modify the memory behavior.
+    """
+
+    memorize_input_file: str = None
+    """
+    Text file to memorize, used by memorization code path (e.g., memorize.py)
+    """

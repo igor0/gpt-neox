@@ -7,10 +7,16 @@ class MemoryDumper:
     Utility to dump memory records into a file.
     """
 
-    def __init__(self, file_name, header={}, file_bytes_limit=1000*1024*1024):
+    def __init__(self, file_name, dim, heads, file_bytes_limit=1000*1024*1024):
         self.file_bytes_limit = file_bytes_limit
 
         self.file = open(file_name, 'wb')
+        self.records_count = 0
+
+        header = {
+            "dim": dim,
+            "heads": heads,
+        }
         pickle.dump(header, self.file)
 
     def dump(self, record):
@@ -18,13 +24,19 @@ class MemoryDumper:
         if self.file.tell() > self.file_bytes_limit:
             raise ValueError("MemoryDumper reached the limit of {} bytes.".format(self.file_bytes_limit))
 
-        # pickle the record into the current batch
+        # write the record into the file
         pickle.dump(record, self.file)
+        self.records_count += 1
 
     def sync(self):
         os.fsync(self.file)
     
     def close(self):
+        footer = {
+            "records_count": self.records_count,
+        }
+        pickle.dump(footer, self.file)
+
         self.file.close()
         self.file = None
 
