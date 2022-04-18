@@ -45,14 +45,12 @@ class MemoryStore:
         if self.memory_dumper is not None:
             self.memory_dumper.sync()
 
-    def add(self, is_training, keys, values, eod_markers):
+    def add_memory(self, keys, values, eod_markers):
         """
             keys: [sq, b, np, hn]
             values: [sq, b, np, hn]
             eod_markers
         """
-
-        print("XXX", "memory add", keys.shape, values.shape, len(eod_markers))
 
         # save the memories to the file, if requested
 
@@ -95,7 +93,7 @@ class MemoryStore:
                 self.valid_from[i] -= min(self.valid_from[i], removed_count)
                 self.first_token[i] -= removed_count
 
-    def get(self, is_training, query_count, eod_markers):
+    def get_memories(self, is_training, query_count, eod_markers):
         # Mask away:
         #    - memorized keys from before EOS
         #    - queries from after EOS

@@ -8,6 +8,7 @@ class MemoryDumper:
     """
 
     def __init__(self, file_name, dim, heads, file_bytes_limit=1000*1024*1024):
+        self.file_name = file_name
         self.file_bytes_limit = file_bytes_limit
 
         self.file = open(file_name, 'wb')
@@ -26,17 +27,25 @@ class MemoryDumper:
 
         # write the record into the file
         pickle.dump(record, self.file)
-        self.records_count += 1
+        self.records_count += record[0].shape[1]
+        print("XXX", record[0].shape)
 
     def sync(self):
         os.fsync(self.file)
     
     def close(self):
+        print(f'MemoryDumper wrote {self.records_count} records into "{self.file_name}".')
+
+        # write a None value to mark the end
+        pickle.dump(None, self.file)
+
+        # write a footer
         footer = {
             "records_count": self.records_count,
         }
         pickle.dump(footer, self.file)
 
+        # close the file
         self.file.close()
         self.file = None
 

@@ -1,11 +1,15 @@
 import faiss
 import pickle
+import torch
+
+from megatron.utils import print_rank_0
 
 from megatron.memorize.paths import (
     get_mem_header_path,
     get_mem_index_path,
     get_mem_keys_path,
-    get_mem_values_path
+    get_mem_values_path,
+    get_mem_dump_path,
 )
 
 class MemIndex:
@@ -42,8 +46,8 @@ def load_memindex(path, layer_number):
 
     return MemIndex(header, index, keys, values)
 
-def build_memindex(path):
-    for layer_number, attn in enumerate(neox_args.attention_config):
+def build_memindex(path, attention_config):
+    for layer_number, attn in enumerate(attention_config):
         if attn == "knn":
             _build_index(path, layer_number)
 
@@ -52,17 +56,27 @@ def _build_index(path, layer_number):
     Loads tensors from a file and builds a faiss index.
     """
     mem_file_path = get_mem_dump_path(path, layer_number)
-    header, keys, values = _load_kv_pairs(mem_file_path, layer_number)
+    header, footer, keys, values = _load_kv_pairs(mem_file_path, layer_number)
+
+    print_rank_0("------------------------------------------------")
+    print_rank_0("Layer:", mem_file_path)
+    print_rank_0("Header:", header)
+    print_rank_0("Footer:", footer)
+    print_rank_0("Keys:", keys.shape)
+    print_rank_0("Values:", values.shape)
+    print_rank_0("------------------------------------------------")
+
+    def check_dim(dim_name, dim_got, dim_exp):
+        if dim_got != dim_exp:
+            raise ValueError(f'Invalid record. "{dim_name}" was {dim_got}, expected {dim_exp}')
 
     # Check dimensions of keys and values
-    if keys.shape[1] != header['heads']:
-        raise ValueError("The number of heads in the key tensor does not match the number of heads in the header.")
-    if values.shape[1] != header['heads']:
-        raise ValueError("The number of heads in the value tensor does not match the number of heads in the header.")
-    if keys.shape[2] != header['dim']:
-        raise ValueError("The dimension of the key tensor does not match the dimension in the header.")
-    if values.shape[2] != header['dim']:
-        raise ValueError("The dimension of the value tensor does not match the dimension in the header.")
+    check_dim('records_count', keys.shape[0], footer['records_count'])
+    check_dim('records_count', values.shape[0], footer['records_count'])
+    check_dim('heads', keys.shape[1], header['heads'])
+    check_dim('heads', values.shape[1], header['heads'])
+    check_dim('dim', keys.shape[2], header['dim'])
+    check_dim('dim', values.shape[2], header['dim'])
 
     # head, sequence, dim
     keys = keys.view(keys.shape[0] * keys.shape[1], keys.shape[2])
@@ -70,7 +84,12 @@ def _build_index(path, layer_number):
 
     # Build the index
     print("Building index from {}".format(mem_file_path))
-    index = faiss.IndexFlatL2(header["dim"])
+
+    dim = header["dim"]
+    quantizer = faiss.IndexFlatL2(dim)
+    nlist = min(4096, 8 * round(math.sqrt(keys.shape[0])))
+    index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+
     index.verbose = True
     index.add(keys)
     index.train()
@@ -103,11 +122,14 @@ def _load_kv_pairs(input_path, layer_number):
         header = pickle.load(f)
 
         while True:
-            try:
-                kv = pickle.load(f)
-                keys.append(kv[0])
-                values.append(kv[1])
-            except EOFError:
+            kv = pickle.load(f)
+            if kv is None:
                 break
 
-    return header, torch.cat(keys), torch.cat(values)
+            keys.append(kv[0])
+            values.append(kv[1])
+            print("XXX", kv[0].shape)
+
+        footer = pickle.load(f)
+
+    return header, footer, torch.cat(keys), torch.cat(values)

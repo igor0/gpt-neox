@@ -365,130 +365,8 @@ class ParallelSelfAttention(nn.Module):
             else:
                 self.memory_key_bias = None
 
-    def knn_lookup(
-        self, query_layer, key_layer, value_layer, knn_key_count
-    ):
-        # ===================================
-        # Raw attention scores. [b, np, s, s]
-        # ===================================
-
-        # [b, np, sq, sk]
-        output_size = (
-            query_layer.size(1),
-            query_layer.size(2),
-            query_layer.size(0),
-            key_layer.size(0),
-        )
-
-        # [sq, b, np, hn] -> [sq, b * np, hn]
-        query_layer = query_layer.view(
-            output_size[2], output_size[0] * output_size[1], -1
-        )
-        key_layer = key_layer.view(output_size[3], output_size[0] * output_size[1], -1)
-        value_layer = value_layer.view(output_size[3], output_size[0] * output_size[1], -1)
-
-        # preallocating result tensor: [b * np, sq, sk]
-        matmul_result = torch.empty(
-            output_size[0] * output_size[1],
-            output_size[2],
-            output_size[3],
-            dtype=query_layer.dtype,
-            device=torch.cuda.current_device(),
-        )
-
-        # Raw attention scores. [b * np, sq, sk]
-        matmul_result = torch.baddbmm(
-            matmul_result,
-            query_layer.transpose(0, 1),  # [b * np, sq, hn]
-            key_layer.transpose(0, 1).transpose(1, 2),  # [b * np, hn, sk]
-        )
-
-        # change view to [b, np, sq, sk]
-        attention_scores = matmul_result.view(*output_size)
-
-        # 'b np sq sk' -> 'b np sq tk' (tk: topk key)
-        attention_scores, attention_indices = attention_scores.topk(knn_key_count)
-        attention_indices = rearrange(attention_indices, 'b np sq tk -> sq (b np) tk')
-
-        # key_layer: [sk, b * np, hn]
-        # key_result: [sq, b * np, tk, hn]
-        key_result = torch.gather(
-            rearrange(key_layer, 'sk x hn -> x sk hn').unsqueeze(0).expand(query_layer.shape[0], -1, -1, -1),
-            dim=2,
-            index=attention_indices.unsqueeze(3).expand(-1, -1, -1, query_layer.shape[2]))
-
-        value_result =  torch.gather(
-            rearrange(value_layer, 'sk x hn -> x sk hn').unsqueeze(0).expand(query_layer.shape[0], -1, -1, -1),
-            dim=2,
-            index=attention_indices.unsqueeze(3).expand(-1, -1, -1, key_layer.shape[2]))
-
-        # TODO: not sure if the clone().detach() is needed
-        return key_result.clone().detach(), value_result.clone().detach()
-
-    def knn_attention(
-        self, query_layer, key_lookup, value_lookup,
-    ):
-        """
-            query_layer: [sq, b, np, hn]
-            key_lookup: [sq, b * np, tk, hn]
-            value_lookup: [sq, b * np, tk, hn]
-        """
-        # ===================================
-        # Raw attention scores. [b, np, s, s]
-        # ===================================
-
-        # [b, np, sq, tk]
-        output_size = (
-            query_layer.size(1),
-            query_layer.size(2),
-            query_layer.size(0),
-            key_lookup.size(2),
-        )
-
-        # [sq, b, np, hn] -> [sq, b * np, hn]
-        query_layer = query_layer.view(
-            output_size[2], output_size[0] * output_size[1], -1
-        )
-
-        # Raw attention scores. [b * np, sq, tk]
-
-        # [sq, b * np, hn] x [sq, b * np, tk, hn] -> [sq, b * np, tk]
-        attention_scores = torch.einsum('ijm, ijkm -> ijk', query_layer, key_lookup)
-        attention_scores = attention_scores / self.norm_factor
-        attention_scores = attention_scores.view(*output_size)
-        attention_scores = rearrange(attention_scores, "sq b np tk -> b np sq tk")
-
-        # ===========================
-        # Attention probs and dropout
-        # ===========================
-
-        # attention scores [b, np, sq, tk]
-        attention_probs = self.scale_mask_softmax(attention_scores, None)
-
-        # This is actually dropping out entire tokens to attend to, which might
-        # seem a bit unusual, but is taken from the original Transformer paper.
-        with mpu.get_cuda_rng_tracker().fork():
-            attention_probs = self.attention_dropout(attention_probs)
-
-        # =========================
-        # Context layer. [sq, b, hp]
-        # =========================
-
-        # attention_probs
-        # expected: [b, np, sq, tk]
-        # got: [np, sq, b, tk]
-
-        attention_probs = rearrange(attention_probs, 'np sq b tk -> sq (b np) tk')
-
-        # attention_probs: [sq, b * np, tk]
-        # value_lookup: [sq, b * np, tk, hn]
-        attention_scores = torch.einsum('ijk, ijkm -> ijm', attention_probs, value_lookup)
-
-        # change view [b, np, sq, hn]
-        return rearrange(attention_scores, 'sq (b np) hn -> b np sq hn', b=output_size[0], np=output_size[1])
-
     def attention(
-        self, query_layer, key_layer, value_layer, layer_past, attention_mask, clip_attn_mask=False
+        self, query_layer, key_layer, value_layer, layer_past, attention_mask, clip_attn_mask=True
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
@@ -556,7 +434,6 @@ class ParallelSelfAttention(nn.Module):
             attention_scores = self.alibi_embed(attention_scores)
 
         # attention scores and attention mask [b, np, sq, sk]
-        print("XXX", "scale_max_softmax", attention_scores.shape, attention_mask.shape)
         attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
 
         # This is actually dropping out entire tokens to attend to, which might
@@ -613,6 +490,7 @@ class ParallelSelfAttention(nn.Module):
 
     def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
         # hidden_states: [sq, b, h]
+        # layer_past: [kv, sk, b, np, hn]
 
         # =====================
         # Query, Key, and Value
@@ -696,53 +574,65 @@ class ParallelSelfAttention(nn.Module):
                 )
             elif self.attention_type == "knn" and not mem_store.is_empty():
                 # Extract keys and values from memory
-                old_keys, old_vals, memory_mask = mem_store.get(self.training, query_layer.shape[0], eod_markers)
+                mem_keys, mem_vals, mem_mask = mem_store.get_memories(self.training, query_layer.shape[0], eod_markers)
+
                 if self.memory_kv_transform is not None:
                     if self.memory_kv_transform == "untied":
-                        kv_sq = old_keys.shape[2]
-                        old_keys = rearrange(old_keys, 'b np sq sk -> b np (sq sk)')
-                        old_vals = rearrange(old_vals, 'b np sq sk -> b np (sq sk)')
+                        kv_sq = mem_keys.shape[2]
+                        mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
+                        mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
 
-                        old_keys = self.memory_key_transform(old_keys)
-                        old_vals = self.memory_value_transform(old_vals)
+                        mem_keys = self.memory_key_transform(mem_keys)
+                        mem_vals = self.memory_value_transform(mem_vals)
 
-                        old_keys = rearrange(old_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                        old_vals = rearrange(old_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                        mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                        mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
                     elif self.memory_kv_transform == "tied":
-                        old_keys = self.memory_key_transform(old_keys)
-                        old_vals = self.memory_value_transform(old_vals)
+                        mem_keys = self.memory_key_transform(mem_keys)
+                        mem_vals = self.memory_value_transform(mem_vals)
                     else:
                         raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
 
                 if self.memory_attn_mode == "concat":
-                    print("XXX", "MASKS", memory_mask.shape, attention_mask.shape)
                     # Adjust the attention mask to exclude the past keys
-                    layer_past_keys = layer_past.numel() if exists(layer_past) else 0
-                    adjusted_attn_mask = attention_mask[:,:,:,layer_past_keys:].expand(memory_mask.shape[0],-1,-1,-1)
+                    if exists(layer_past) and layer_past.numel() > 0:
+                        # On the normal path, the attention adjustment for layer_past is made in
+                        # the attention() function. But, since we are also using memory, we need
+                        # an attention mask that accounts for memory, layer_past, and context.
+                        # We adjust the attention mask here and then don't pass layer_past into
+                        # attention().
+                        #
+                        # Adjustment: no queries are needed for tokens in layer_past, even though
+                        # they are already represented in key_layer/value_layer.
+                        past_key_count = past_key.shape[0]
+                        attention_mask = attention_mask[:,:,past_key_count:,:]
+
+                        assert attention_mask.shape == (1, 1, 1, key_layer.shape[0])
+                        assert (~attention_mask).all()
 
                     # Concat memories with attention
-                    old_keys = old_keys + self.memory_key_bias
+                    mem_keys = mem_keys + self.memory_key_bias
                     context_layer = self.attention(
                         query_layer,
-                        torch.cat((old_keys, key_layer)),
-                        torch.cat((old_vals, value_layer)),
+                        torch.cat((mem_keys, key_layer)),
+                        torch.cat((mem_vals, value_layer)),
                         None,
-                        torch.cat((memory_mask, adjusted_attn_mask), dim=3),
+                        torch.cat((mem_mask, attention_mask), dim=3),
                         clip_attn_mask=False,
                     )
                 elif self.memory_attn_mode == "sigmoid":
                     mem_context_layer = self.attention(
                         query_layer,
-                        old_keys,
-                        old_vals,
+                        mem_keys,
+                        mem_vals,
                         None,
-                        torch.cat(memory_mask))
+                        torch.cat(mem_mask))
 
                     local_context_layer = self.attention(
                         query_layer,
                         key_layer,
                         value_layer,
-                        None,
+                        layer_past,
                         attention_mask)
 
                     # Use sigmoid to combine memories with attention
@@ -767,7 +657,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            mem_store.add(self.training, cur_key_layer, cur_value_layer, eod_markers)
+            mem_store.add_memory(cur_key_layer, cur_value_layer, eod_markers)
 
         # =================
         # Output. [sq, b, h]
