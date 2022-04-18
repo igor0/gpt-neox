@@ -27,8 +27,7 @@ class MemoryDumper:
 
         # write the record into the file
         pickle.dump(record, self.file)
-        self.records_count += record[0].shape[1]
-        print("XXX", record[0].shape)
+        self.records_count += record[0].shape[0]
 
     def sync(self):
         os.fsync(self.file)

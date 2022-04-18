@@ -313,7 +313,10 @@ class ParallelSelfAttention(nn.Module):
             # TODO: is the device guaranteed to be known at this point?
             device = torch.cuda.current_device()
 
-            if neox_args.memory_save:
+            if neox_args.memory_save is not None:
+                if neox_args.memory_load is not None:
+                    raise ValueError("At most one of 'memory_load' and 'memory_save' arguments may be specified.")
+
                 Path(neox_args.memory_save).mkdir(exist_ok = True, parents = True)
                 def init_dumper(training):
                     if training:
@@ -331,11 +334,17 @@ class ParallelSelfAttention(nn.Module):
             else:
                 memory_dumper_init = None
 
-            self.memory = memorize.SimpleMemory(
-                device,
-                neox_args.memory_size,
-                neox_args.memory_invalid_query_mode,
-                memory_dumper_init = memory_dumper_init)
+            if neox_args.memory_load is not None:
+                # Load precomputed memories from the specified index
+                self.memory = load_memindex(neox_args.memory_load, layer_number)
+            else:
+                # Maintain a sliding window of memories
+                self.memory = memorize.SimpleMemory(
+                    device,
+                    neox_args.memory_size,
+                    neox_args.memory_invalid_query_mode,
+                    memory_index = memory_index,
+                    memory_dumper_init = memory_dumper_init)
 
             if neox_args.memory_attn_mode == "sigmoid":
                 self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
@@ -657,7 +666,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            mem_store.add_memory(cur_key_layer, cur_value_layer, eod_markers)
+            mem_store.add_memories(cur_key_layer, cur_value_layer, eod_markers)
 
         # =================
         # Output. [sq, b, h]

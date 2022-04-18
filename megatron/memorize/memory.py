@@ -45,7 +45,7 @@ class MemoryStore:
         if self.memory_dumper is not None:
             self.memory_dumper.sync()
 
-    def add_memory(self, keys, values, eod_markers):
+    def add_memories(self, keys, values, eod_markers):
         """
             keys: [sq, b, np, hn]
             values: [sq, b, np, hn]
@@ -56,8 +56,8 @@ class MemoryStore:
 
         if self.memory_dumper is not None:
             self.memory_dumper.dump([
-                keys.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]),
-                values.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]),
+                keys.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
+                values.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
             ])
 
         # record the memories

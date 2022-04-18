@@ -16,26 +16,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from megatron.utils import print_rank_0, setup_for_inference_or_eval
-
-from megatron.memorize.memorize_utils import memorize_from_file
+from megatron.memorize.memindex import build_memindex
+from megatron.neox_arguments import NeoXArgs
+from megatron.utils import print_rank_0
 
 def main():
     """
     Generate text/sample model
     """
-    model, neox_args = setup_for_inference_or_eval()
-    model.eval()
-
-    print_rank_0(f'Memorizing from input file {neox_args.memorize_input_file}')
-    if neox_args.memorize_input_file is None:
-        raise ValueError(f"`memorize_input_file` is not specified.")
-
-    memorize_from_file(
-        neox_args=neox_args,
-        model=model,
-        input_file=neox_args.memorize_input_file,
-    )
+    neox_args = NeoXArgs.consume_neox_args()
+    build_memindex(neox_args.memory_save, neox_args.attention_config)
+    print_rank_0("Done.")
 
 if __name__ == "__main__":
     main()
