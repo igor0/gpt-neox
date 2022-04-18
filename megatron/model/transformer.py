@@ -336,14 +336,13 @@ class ParallelSelfAttention(nn.Module):
 
             if neox_args.memory_load is not None:
                 # Load precomputed memories from the specified index
-                self.memory = load_memindex(neox_args.memory_load, layer_number)
+                self.memory = load_memory_snapshot(neox_args.memory_load, layer_number)
             else:
                 # Maintain a sliding window of memories
-                self.memory = memorize.SimpleMemory(
+                self.memory = memorize.MemoryLive(
                     device,
                     neox_args.memory_size,
                     neox_args.memory_invalid_query_mode,
-                    memory_index = memory_index,
                     memory_dumper_init = memory_dumper_init)
 
             if neox_args.memory_attn_mode == "sigmoid":
@@ -574,16 +573,16 @@ class ParallelSelfAttention(nn.Module):
         if self.get_key_value:
             present = torch.stack((key_layer, value_layer))
 
-        mem_store = self.memory.get_store(self.training) if self.attention_type == "knn" else None
+        mem = self.memory.get_partition(self.training) if self.attention_type == "knn" else None
 
         if not self.sparse:
-            if self.attention_type != "knn" or mem_store.is_empty():
+            if self.attention_type != "knn" or mem.is_empty():
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask
                 )
-            elif self.attention_type == "knn" and not mem_store.is_empty():
+            elif self.attention_type == "knn" and not mem.is_empty():
                 # Extract keys and values from memory
-                mem_keys, mem_vals, mem_mask = mem_store.get_memories(self.training, query_layer.shape[0], eod_markers)
+                mem_keys, mem_vals, mem_mask = mem.get_memories(self.training, query_layer.shape[0], eod_markers)
 
                 if self.memory_kv_transform is not None:
                     if self.memory_kv_transform == "untied":
@@ -666,7 +665,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            mem_store.add_memories(cur_key_layer, cur_value_layer, eod_markers)
+            mem.add_memories(cur_key_layer, cur_value_layer, eod_markers)
 
         # =================
         # Output. [sq, b, h]

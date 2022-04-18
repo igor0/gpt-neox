@@ -16,7 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from megatron.memorize.memindex import build_memindex
+from megatron.memorize import index_memory_snapshot
 from megatron.neox_arguments import NeoXArgs
 from megatron.utils import print_rank_0
 
@@ -25,7 +25,7 @@ def main():
     Generate text/sample model
     """
     neox_args = NeoXArgs.consume_neox_args()
-    build_memindex(neox_args.memory_save, neox_args.attention_config)
+    index_memory_snapshot(neox_args.memory_save, neox_args.attention_config)
     print_rank_0("Done.")
 
 if __name__ == "__main__":

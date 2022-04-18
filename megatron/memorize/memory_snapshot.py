@@ -5,23 +5,16 @@ import pickle
 import torch
 
 from megatron.utils import print_rank_0
+from megatron.memorize.paths import *
 
-from megatron.memorize.paths import (
-    get_mem_metadata_path,
-    get_mem_index_path,
-    get_mem_keys_path,
-    get_mem_values_path,
-    get_mem_dump_path,
-)
-
-class MemIndex:
+class _MemorySnapshot:
     def __init__(self, header, index, keys, values):
         self.header = header
         self.index = index
         self.keys = keys
         self.values = values
 
-    def add_memories(self, *args, *kwargs):
+    def add_memories(self, *args, **kwargs):
         return
 
     def get_memories(self, is_training, query_count, eod_markers):
@@ -32,7 +25,7 @@ class MemIndex:
     def is_empty(self):
         return False
 
-def load_memindex(path, layer_number):
+def load_memory_snapshot(path, layer_number):
     # Load the header
     header_file_path = get_mem_metadata_path(path, layer_number)
     with open(header_file_path, "rb") as f:
@@ -53,9 +46,9 @@ def load_memindex(path, layer_number):
     print("Loading values from {}".format(values_file_path))
     values = np.load(values_file_path)
 
-    return MemIndex(header, index, keys, values)
+    return _MemorySnapshot(header, index, keys, values)
 
-def build_memindex(path, attention_config):
+def index_memory_snapshot(path, attention_config):
     """
     Builds memindex for all memorizing layers in the model.
     """

@@ -1,3 +1,3 @@
 from .memory_dumper import MemoryDumper
-from .memory import SimpleMemory, MemoryStore
-from .memindex import load_memindex, build_memindex
+from .memory_live import MemoryLive
+from .memory_snapshot import load_memory_snapshot, index_memory_snapshot

@@ -1,11 +1,11 @@
 import torch
 
-class MemoryStore:
+class MemoryLive:
     """
-    Storage of key-value memories in a single transformer layer.
+    Represents a sliding window of memories tracked for a particular model.
     """
 
-    def __init__(self, memory_size, memory_invalid_query_mode, memory_dumper=None):
+    def __init__(self, device, memory_size, memory_invalid_query_mode, memory_dumper_init=None):
         """
         memory_size:
             Number of key/value pairs (per batch & attention head) to retain
@@ -23,9 +23,53 @@ class MemoryStore:
                 * "all_tokens" attends to all tokens in memory uniformly
 
         memory_dumper:
-            Optional MemoryDumper to persist any memories added to the MemoryStore.
+            Optional MemoryDumper to persist any added memories.
         """
+        self.device = device
 
+        self.training = True
+
+        if memory_dumper_init is None:
+            memory_dumper_init = lambda training: None
+
+        self.partition = _MemoryPartition(
+            memory_size,
+            memory_invalid_query_mode,
+            memory_dumper_init(self.training),
+        )
+        self.inactive_partition = _MemoryPartition(
+            memory_size,
+            memory_invalid_query_mode,
+            memory_dumper_init(not self.training),
+        )
+
+    def get_partition(self, training):
+        if training != self.training:
+            # swap out the memory partitions (training or evaluation)
+            self.inactive_partition, self.partition = self.partition, self.inactive_partition
+
+            # move the active partition to the GPU and the inactive one to the CPU
+            self.inactive_partition._move_to(torch.device('cpu'))
+            self.partition._move_to(self.device)
+
+            # sync the inactive partition (if dumping to file)
+            self.inactive_partition._sync()
+
+            self.training = training
+            if self.training:
+                # Clear the evaluation memory at the end of each evaluation cycle
+                self.inactive_partition._clear()
+
+        return self.partition
+
+
+class _MemoryPartition:
+    """
+    Partition of key-value memories in a single transformer layer. We expect one partition
+    for training and one for evaluation.
+    """
+
+    def __init__(self, memory_size, memory_invalid_query_mode, memory_dumper=None):
         self.memory_size = memory_size
         self.memory_invalid_query_mode = memory_invalid_query_mode
         self.memory_dumper = memory_dumper
@@ -120,39 +164,3 @@ class MemoryStore:
 
     def is_empty(self):
         return self.keys is None
-
-class SimpleMemory:
-    """
-    Tracks two memory stores - one for training and one for evaluation - and switches between
-    them as needed.
-    """
-
-    def __init__(self, device, memory_size, memory_invalid_query_mode, memory_dumper_init=None):
-        self.device = device
-
-        self.training = True
-
-        if memory_dumper_init is None:
-            memory_dumper_init = lambda training: None
-
-        self.store = MemoryStore(memory_size, memory_invalid_query_mode, memory_dumper_init(self.training))
-        self.inactive_store = MemoryStore(memory_size, memory_invalid_query_mode, memory_dumper_init(not self.training))
-
-    def get_store(self, training):
-        if training != self.training:
-            # swap out the memory stores (training or evaluation)
-            self.inactive_store, self.store = self.store, self.inactive_store
-
-            # move the active store to the GPU and the inactive one to the CPU
-            self.inactive_store._move_to(torch.device('cpu'))
-            self.store._move_to(self.device)
-
-            # sync the inactive store (if dumping to file)
-            self.inactive_store._sync()
-
-            self.training = training
-            if self.training:
-                # Clear the evaluation memory at the end of each evaluation cycle
-                self.inactive_store._clear()
-
-        return self.store
