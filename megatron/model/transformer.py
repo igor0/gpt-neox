@@ -488,7 +488,7 @@ class ParallelSelfAttention(nn.Module):
         return rearrange(attention_scores, 'sq (b np) hn -> b np sq hn', b=output_size[0], np=output_size[1])
 
     def attention(
-        self, query_layer, key_layer, value_layer, layer_past, attention_mask
+        self, query_layer, key_layer, value_layer, layer_past, attention_mask, clip_attn_mask=False
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
@@ -533,7 +533,7 @@ class ParallelSelfAttention(nn.Module):
         # Update attention mask for inference. [b, np, sq, sk]
         # ==================================================
 
-        if self.get_key_value:
+        if self.get_key_value and clip_attn_mask:
             with torch.no_grad():
                 if layer_past is not None and layer_past.numel() > 0:
                     attention_mask = attention_mask[
@@ -556,6 +556,7 @@ class ParallelSelfAttention(nn.Module):
             attention_scores = self.alibi_embed(attention_scores)
 
         # attention scores and attention mask [b, np, sq, sk]
+        print("XXX", "scale_max_softmax", attention_scores.shape, attention_mask.shape)
         attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
 
         # This is actually dropping out entire tokens to attend to, which might
@@ -696,7 +697,6 @@ class ParallelSelfAttention(nn.Module):
             elif self.attention_type == "knn" and not mem_store.is_empty():
                 # Extract keys and values from memory
                 old_keys, old_vals, memory_mask = mem_store.get(self.training, query_layer.shape[0], eod_markers)
-
                 if self.memory_kv_transform is not None:
                     if self.memory_kv_transform == "untied":
                         kv_sq = old_keys.shape[2]
@@ -715,6 +715,11 @@ class ParallelSelfAttention(nn.Module):
                         raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
 
                 if self.memory_attn_mode == "concat":
+                    print("XXX", "MASKS", memory_mask.shape, attention_mask.shape)
+                    # Adjust the attention mask to exclude the past keys
+                    layer_past_keys = layer_past.numel() if exists(layer_past) else 0
+                    adjusted_attn_mask = attention_mask[:,:,:,layer_past_keys:].expand(memory_mask.shape[0],-1,-1,-1)
+
                     # Concat memories with attention
                     old_keys = old_keys + self.memory_key_bias
                     context_layer = self.attention(
@@ -722,7 +727,8 @@ class ParallelSelfAttention(nn.Module):
                         torch.cat((old_keys, key_layer)),
                         torch.cat((old_vals, value_layer)),
                         None,
-                        torch.cat((memory_mask, attention_mask.expand(memory_mask.shape[0],-1,-1,-1)), dim=3)
+                        torch.cat((memory_mask, adjusted_attn_mask), dim=3),
+                        clip_attn_mask=False,
                     )
                 elif self.memory_attn_mode == "sigmoid":
                     mem_context_layer = self.attention(
