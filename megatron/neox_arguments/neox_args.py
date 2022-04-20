@@ -1032,3 +1032,8 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     """
     Text file to memorize, used by memorization code path (e.g., memorize.py)
     """
+
+    memorize_on: bool = False
+    """
+    Whether to memorize
+    """

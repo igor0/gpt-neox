@@ -32,6 +32,7 @@ setuptools.setup(
         "ftfy==6.0.1",
         "deepspeed @ git+https://github.com/EleutherAI/DeeperSpeed.git@eb7f5cff36678625d23db8a8fe78b4a93e5d2c75",
         "lm-eval @ git+https://github.com/EleutherAI/lm-evaluation-harness.git@dc937d4b70af819c5695e09d94e59e4cdb1e40ad",
+        "faiss-cpu==1.7.2",
         "fused_kernels @ file://localhost{}/megatron/fused_kernels".format(PKG_DIR),
     ],
     python_requires=">=3.6",

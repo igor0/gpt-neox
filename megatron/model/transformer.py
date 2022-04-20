@@ -49,6 +49,7 @@ from megatron.model.fused_bias_dropout import (
 )
 from megatron.model.utils import configure_sparse_attention
 from megatron.memorize.paths import get_mem_dump_path
+from megatron.memorize import load_memory_snapshot, index_memory_snapshot
 
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
@@ -313,10 +314,7 @@ class ParallelSelfAttention(nn.Module):
             # TODO: is the device guaranteed to be known at this point?
             device = torch.cuda.current_device()
 
-            if neox_args.memory_save is not None:
-                if neox_args.memory_load is not None:
-                    raise ValueError("At most one of 'memory_load' and 'memory_save' arguments may be specified.")
-
+            if neox_args.memory_save is not None and neox_args.memorize_on:
                 Path(neox_args.memory_save).mkdir(exist_ok = True, parents = True)
                 def init_dumper(training):
                     if training:
@@ -326,15 +324,17 @@ class ParallelSelfAttention(nn.Module):
 
                     mem_file = get_mem_dump_path(neox_args.memory_save, layer_number)
                     return memorize.MemoryDumper(
-                        mem_file,
-                        dim=self.hidden_size_per_attention_head,
-                        heads=self.num_attention_heads_per_partition
+                        layer_number = layer_number,
+                        file_path = mem_file,
+                        dim = self.hidden_size_per_attention_head,
+                        heads = self.num_attention_heads_per_partition,
+                        index_memory_func = index_memory_snapshot
                     )
                 memory_dumper_init = init_dumper
             else:
                 memory_dumper_init = None
 
-            if neox_args.memory_load is not None:
+            if neox_args.memory_load is not None and not neox_args.memorize_on:
                 # Load precomputed memories from the specified index
                 self.memory = load_memory_snapshot(neox_args.memory_load, layer_number)
             else:
@@ -374,7 +374,7 @@ class ParallelSelfAttention(nn.Module):
                 self.memory_key_bias = None
 
     def attention(
-        self, query_layer, key_layer, value_layer, layer_past, attention_mask, clip_attn_mask=True
+        self, query_layer, key_layer, value_layer, layer_past, attention_mask
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
@@ -414,21 +414,6 @@ class ParallelSelfAttention(nn.Module):
 
         # change view to [b, np, sq, sk]
         attention_scores = matmul_result.view(*output_size)
-
-        # ==================================================
-        # Update attention mask for inference. [b, np, sq, sk]
-        # ==================================================
-
-        if self.get_key_value and clip_attn_mask:
-            with torch.no_grad():
-                if layer_past is not None and layer_past.numel() > 0:
-                    attention_mask = attention_mask[
-                        ..., attention_scores.size(3) - 1, : attention_scores.size(3)
-                    ].unsqueeze(2)
-                else:
-                    attention_mask = attention_mask[
-                        ..., : attention_scores.size(3), : attention_scores.size(3)
-                    ]
 
         # ===========================
         # Attention probs and dropout
@@ -576,78 +561,81 @@ class ParallelSelfAttention(nn.Module):
         mem = self.memory.get_partition(self.training) if self.attention_type == "knn" else None
 
         if not self.sparse:
+            sz_past_keys = past_key.size(0) if exists(layer_past) and layer_past.numel() > 0 else 0
+            sz_queries = query_layer.size(0)
+            sz_keys = key_layer.size(0)
+
+            # Shrink the attention mask to match the actual number of queries & keys, and exclude
+            # past keys from queries
+            attention_mask = attention_mask[:,:,sz_past_keys:sz_past_keys+sz_queries,:sz_keys]
+
+            if exists(layer_past) and layer_past.numel() > 0:
+                assert attention_mask.shape == (1, 1, 1, sz_keys)
+                assert (~attention_mask).all()
+
             if self.attention_type != "knn" or mem.is_empty():
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask
                 )
             elif self.attention_type == "knn" and not mem.is_empty():
                 # Extract keys and values from memory
-                mem_keys, mem_vals, mem_mask = mem.get_memories(self.training, query_layer.shape[0], eod_markers)
+                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer, eod_markers)
 
-                if self.memory_kv_transform is not None:
-                    if self.memory_kv_transform == "untied":
-                        kv_sq = mem_keys.shape[2]
-                        mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
-                        mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
-
-                        mem_keys = self.memory_key_transform(mem_keys)
-                        mem_vals = self.memory_value_transform(mem_vals)
-
-                        mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                        mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                    elif self.memory_kv_transform == "tied":
-                        mem_keys = self.memory_key_transform(mem_keys)
-                        mem_vals = self.memory_value_transform(mem_vals)
-                    else:
-                        raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
-
-                if self.memory_attn_mode == "concat":
-                    # Adjust the attention mask to exclude the past keys
-                    if exists(layer_past) and layer_past.numel() > 0:
-                        # On the normal path, the attention adjustment for layer_past is made in
-                        # the attention() function. But, since we are also using memory, we need
-                        # an attention mask that accounts for memory, layer_past, and context.
-                        # We adjust the attention mask here and then don't pass layer_past into
-                        # attention().
-                        #
-                        # Adjustment: no queries are needed for tokens in layer_past, even though
-                        # they are already represented in key_layer/value_layer.
-                        past_key_count = past_key.shape[0]
-                        attention_mask = attention_mask[:,:,past_key_count:,:]
-
-                        assert attention_mask.shape == (1, 1, 1, key_layer.shape[0])
-                        assert (~attention_mask).all()
-
-                    # Concat memories with attention
-                    mem_keys = mem_keys + self.memory_key_bias
+                if mem_keys is None:
                     context_layer = self.attention(
-                        query_layer,
-                        torch.cat((mem_keys, key_layer)),
-                        torch.cat((mem_vals, value_layer)),
-                        None,
-                        torch.cat((mem_mask, attention_mask), dim=3),
-                        clip_attn_mask=False,
+                        query_layer, key_layer, value_layer, layer_past, attention_mask
                     )
-                elif self.memory_attn_mode == "sigmoid":
-                    mem_context_layer = self.attention(
-                        query_layer,
-                        mem_keys,
-                        mem_vals,
-                        None,
-                        torch.cat(mem_mask))
+                else: #XXX
+                    if self.memory_kv_transform is not None:
+                        if self.memory_kv_transform == "untied":
+                            kv_sq = mem_keys.shape[2]
+                            mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
+                            mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
 
-                    local_context_layer = self.attention(
-                        query_layer,
-                        key_layer,
-                        value_layer,
-                        layer_past,
-                        attention_mask)
+                            mem_keys = self.memory_key_transform(mem_keys)
+                            mem_vals = self.memory_value_transform(mem_vals)
 
-                    # Use sigmoid to combine memories with attention
-                    gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                    context_layer = local_context_layer * gate + mem_context_layer * (1 - gate)
-                else:
-                    raise BaseException("Unknown memory_attn_mode", neox_args.memory_attn_mode)
+                            mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                            mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                        elif self.memory_kv_transform == "tied":
+                            mem_keys = self.memory_key_transform(mem_keys)
+                            mem_vals = self.memory_value_transform(mem_vals)
+                        else:
+                            raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
+
+                    if self.memory_attn_mode == "concat":
+                        # Add trained bias to the keys. The intent is to compensate for the lack of
+                        # positional embedding.
+                        mem_keys = mem_keys + self.memory_key_bias
+
+                        # Concat memories with attention so that attention heads can attend to both
+                        context_layer = self.attention(
+                            query_layer,
+                            torch.cat((mem_keys, key_layer)),
+                            torch.cat((mem_vals, value_layer)),
+                            None,
+                            torch.cat((mem_mask, attention_mask), dim=3)
+                        )
+                    elif self.memory_attn_mode == "sigmoid":
+                        mem_context_layer = self.attention(
+                            query_layer,
+                            mem_keys,
+                            mem_vals,
+                            None,
+                            torch.cat(mem_mask))
+
+                        local_context_layer = self.attention(
+                            query_layer,
+                            key_layer,
+                            value_layer,
+                            layer_past,
+                            attention_mask)
+
+                        # Use sigmoid to combine memories with attention
+                        gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
+                        context_layer = local_context_layer * gate + mem_context_layer * (1 - gate)
+                    else:
+                        raise BaseException("Unknown memory_attn_mode", neox_args.memory_attn_mode)
 
         else:
             context_layer = self.sparse_attention(

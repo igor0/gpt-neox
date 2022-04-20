@@ -7,11 +7,13 @@ class MemoryDumper:
     Utility to dump memory records into a file.
     """
 
-    def __init__(self, file_name, dim, heads, file_bytes_limit=1000*1024*1024):
-        self.file_name = file_name
+    def __init__(self, layer_number, file_path, index_memory_func, dim, heads, file_bytes_limit=1000*1024*1024):
+        self.layer_number = layer_number
+        self.file_path = file_path
+        self.index_memory_func = index_memory_func
         self.file_bytes_limit = file_bytes_limit
 
-        self.file = open(file_name, 'wb')
+        self.file = open(file_path, 'wb')
         self.records_count = 0
 
         header = {
@@ -33,7 +35,7 @@ class MemoryDumper:
         os.fsync(self.file)
     
     def close(self):
-        print(f'MemoryDumper wrote {self.records_count} records into "{self.file_name}".')
+        print(f'MemoryDumper wrote {self.records_count} records into "{self.file_path}".')
 
         # write a None value to mark the end
         pickle.dump(None, self.file)
@@ -47,6 +49,12 @@ class MemoryDumper:
         # close the file
         self.file.close()
         self.file = None
+
+        # build an index
+        self.index_memory_func(os.path.dirname(self.file_path), self.layer_number)
+
+        # remove the pickled file
+        os.remove(self.file_path)
 
     def __enter__(self):
         return self
