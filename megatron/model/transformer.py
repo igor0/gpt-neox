@@ -250,8 +250,10 @@ class ParallelSelfAttention(nn.Module):
                 mpu.get_model_parallel_rank(),
             )
 
+        self.attention_type = neox_args.attention_config[layer_number]
+
         # TODO: this arg shouldn't need to be passed in - get from neox_args
-        if rotary:
+        if rotary and self.attention_type == "global":
             if neox_args.rotary_pct == 1:
                 self.rotary_ndims = None
             else:
@@ -270,8 +272,7 @@ class ParallelSelfAttention(nn.Module):
         else:
             self.rotary_emb = None
 
-        self.attention_type = neox_args.attention_config[layer_number]
-        self.sparse = self.attention_type != "global" and self.attention_type != "knn"
+        self.sparse = not self.attention_type.startswith("global") and self.attention_type != "knn"
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -374,7 +375,7 @@ class ParallelSelfAttention(nn.Module):
                 self.memory_key_bias = None
 
     def attention(
-        self, query_layer, key_layer, value_layer, layer_past, attention_mask
+        self, query_layer, key_layer, value_layer, layer_past, attention_mask,
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
@@ -512,7 +513,7 @@ class ParallelSelfAttention(nn.Module):
                 cur_key_layer = l2norm(cur_key_layer)
                 cur_value_layer = l2norm(cur_value_layer)
 
-        if exists(self.rotary_emb):
+        if exists(self.rotary_emb) and self.attention_type != "global_nopos":
             if exists(self.rotary_ndims):
                 # partial rotary
                 query_rot, query_pass = (
@@ -575,67 +576,62 @@ class ParallelSelfAttention(nn.Module):
 
             if self.attention_type != "knn" or mem.is_empty():
                 context_layer = self.attention(
-                    query_layer, key_layer, value_layer, layer_past, attention_mask
+                    query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
             elif self.attention_type == "knn" and not mem.is_empty():
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer, eod_markers)
 
-                if mem_keys is None:
-                    context_layer = self.attention(
-                        query_layer, key_layer, value_layer, layer_past, attention_mask
-                    )
-                else: #XXX
-                    if self.memory_kv_transform is not None:
-                        if self.memory_kv_transform == "untied":
-                            kv_sq = mem_keys.shape[2]
-                            mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
-                            mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
+                if self.memory_kv_transform is not None:
+                    if self.memory_kv_transform == "untied":
+                        kv_sq = mem_keys.shape[2]
+                        mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
+                        mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
 
-                            mem_keys = self.memory_key_transform(mem_keys)
-                            mem_vals = self.memory_value_transform(mem_vals)
+                        mem_keys = self.memory_key_transform(mem_keys)
+                        mem_vals = self.memory_value_transform(mem_vals)
 
-                            mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                            mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                        elif self.memory_kv_transform == "tied":
-                            mem_keys = self.memory_key_transform(mem_keys)
-                            mem_vals = self.memory_value_transform(mem_vals)
-                        else:
-                            raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
-
-                    if self.memory_attn_mode == "concat":
-                        # Add trained bias to the keys. The intent is to compensate for the lack of
-                        # positional embedding.
-                        mem_keys = mem_keys + self.memory_key_bias
-
-                        # Concat memories with attention so that attention heads can attend to both
-                        context_layer = self.attention(
-                            query_layer,
-                            torch.cat((mem_keys, key_layer)),
-                            torch.cat((mem_vals, value_layer)),
-                            None,
-                            torch.cat((mem_mask, attention_mask), dim=3)
-                        )
-                    elif self.memory_attn_mode == "sigmoid":
-                        mem_context_layer = self.attention(
-                            query_layer,
-                            mem_keys,
-                            mem_vals,
-                            None,
-                            torch.cat(mem_mask))
-
-                        local_context_layer = self.attention(
-                            query_layer,
-                            key_layer,
-                            value_layer,
-                            layer_past,
-                            attention_mask)
-
-                        # Use sigmoid to combine memories with attention
-                        gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                        context_layer = local_context_layer * gate + mem_context_layer * (1 - gate)
+                        mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                        mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                    elif self.memory_kv_transform == "tied":
+                        mem_keys = self.memory_key_transform(mem_keys)
+                        mem_vals = self.memory_value_transform(mem_vals)
                     else:
-                        raise BaseException("Unknown memory_attn_mode", neox_args.memory_attn_mode)
+                        raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
+
+                if self.memory_attn_mode == "concat":
+                    # Add trained bias to the keys. The intent is to compensate for the lack of
+                    # positional embedding.
+                    mem_keys = mem_keys + self.memory_key_bias
+
+                    # Concat memories with attention so that attention heads can attend to both
+                    context_layer = self.attention(
+                        query_layer,
+                        torch.cat((mem_keys, key_layer)),
+                        torch.cat((mem_vals, value_layer)),
+                        None,
+                        torch.cat((mem_mask, attention_mask), dim=3)
+                    )
+                elif self.memory_attn_mode == "sigmoid":
+                    mem_context_layer = self.attention(
+                        query_layer,
+                        mem_keys,
+                        mem_vals,
+                        None,
+                        torch.cat(mem_mask))
+
+                    local_context_layer = self.attention(
+                        query_layer,
+                        key_layer,
+                        value_layer,
+                        layer_past,
+                        attention_mask)
+
+                    # Use sigmoid to combine memories with attention
+                    gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
+                    context_layer = local_context_layer * gate + mem_context_layer * (1 - gate)
+                else:
+                    raise BaseException("Unknown memory_attn_mode", neox_args.memory_attn_mode)
 
         else:
             context_layer = self.sparse_attention(

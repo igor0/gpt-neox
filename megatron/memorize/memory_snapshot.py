@@ -8,12 +8,15 @@ from megatron.utils import print_rank_0
 from megatron.memorize.paths import *
 
 class _MemorySnapshot:
-    def __init__(self, header, all_indexes, all_keys, all_values):
+    def __init__(self, header, layer_number, all_indexes, all_keys, all_values):
         self.header = header
+        self.layer_number = layer_number
         self.all_indexes = all_indexes
         self.all_keys = all_keys
         self.all_values = all_values
         self.k = 32 # XXX - make this a config parameter
+
+        self.stats = {}
 
     def get_partition(self, training):
         # Unlike with live memory, memory snapshot has no separate partition for evaluation and
@@ -39,8 +42,33 @@ class _MemorySnapshot:
             qhead = np.float32(qhead.cpu().numpy())
 
             distances, ids = self.all_indexes[head].search(qhead, k=self.k)
+            for i in range(ids.shape[0]):
+                best_id = ids[i,0] if ids[i,0] != -1 else 0
+                if best_id not in self.stats:
+                    self.stats[best_id] = 0
 
-            # If no match, simply use the first key. TODO: explain why
+                self.stats[best_id] += 1
+
+            if False:
+                for i in range(ids.shape[0]):
+                    for j in range(ids.shape[1]):
+                        id_adj = ids[i,j]
+                        id_adj = id_adj if id_adj != -1 else 0
+                        print("ID", ids[i,j], "->", id_adj, "DIST", distances[i,j], np.dot(qhead[i,:], self.all_keys[head][id_adj,:]))
+
+                    best = -1
+                    best_dist = 0
+                    for j in range(self.all_keys[head].shape[0]):
+                        dist = np.dot(qhead[i,:], self.all_keys[head][j,:])
+                        if best == -1 or dist > best_dist:
+                            best = j
+                            best_dist = dist
+                    print("BEST", best, best_dist)
+
+
+                # If no match, simply use the first key. TODO: explain why
+                print("XXX", "FOUND IDS", np.count_nonzero(ids != -1), "/", ids.size)
+
             ids[ids == -1] = 0
             ids = np.expand_dims(ids.flatten(), axis=1)
             
@@ -52,8 +80,6 @@ class _MemorySnapshot:
             res_keys.append(keys.unsqueeze(dim=2))
             res_values.append(values.unsqueeze(dim=2))
 
-            print("KV", keys.shape, values.shape)
-
         # mask: [b, np, sq, sk]
         mask = torch.full(
             size=(queries.shape[1], 1, queries.shape[0], self.k * queries.shape[0]),
@@ -64,6 +90,10 @@ class _MemorySnapshot:
 
     def is_empty(self):
         return False
+
+    def __del__(self):
+        sorted_stats = {k: v for k, v in sorted(self.stats.items(), key=lambda item: -item[1])}
+        print("[", self.layer_number, "]", sorted_stats)
 
 def load_memory_snapshot(path, layer_number):
     # Load the header
@@ -94,7 +124,7 @@ def load_memory_snapshot(path, layer_number):
         values = np.load(values_file_path)
         all_values.append(values)
 
-    return _MemorySnapshot(header, all_indexes, all_keys, all_values)
+    return _MemorySnapshot(header, layer_number, all_indexes, all_keys, all_values)
 
 def index_memory_snapshot(path, layer_number):
     """
@@ -148,9 +178,10 @@ def index_memory_snapshot(path, layer_number):
 
         # Create a faiss KNN index for the keys
         dim = metadata["dim"]
-        quantizer = faiss.IndexFlatIP(dim)
-        nlist = min(4096, round(math.sqrt(keys.shape[0])))
-        index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+        #quantizer = faiss.IndexFlatIP(dim)
+        #nlist = min(4096, round(math.sqrt(keys.shape[0])))
+        #index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+        index = faiss.IndexFlatIP(dim)
 
         # Convert the keys to float32 numpy array, which is what faiss expects
         keys_for_index = keys[:, head, :].numpy()
