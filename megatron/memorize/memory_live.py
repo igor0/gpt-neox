@@ -100,6 +100,7 @@ class _MemoryPartition:
         # adjust the offset to apply to the positional embedding
 
         self.pos_offset += keys.shape[0] * keys.shape[1]
+        print("XXX", "pos_offset +=", keys.shape[0] * keys.shape[1], keys.shape)
 
         # save the memories to the file, if requested
 

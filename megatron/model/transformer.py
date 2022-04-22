@@ -507,13 +507,6 @@ class ParallelSelfAttention(nn.Module):
 
         if self.attention_type == "knn":
             mem = self.memory.get_partition(self.training)
-            #key_layer_nopos = key_layer.clone().detach()
-            #value_layer_nopos = value_layer.clone().detach()
-            #query_layer_nopos = query_layer.clone().detach()
-
-            #if self.memory_kv_normalize:
-                #key_layer_nopos = l2norm(key_layer_nopos)
-                #value_layer_nopos = l2norm(value_layer_nopos)
         else:
             mem = None
 
@@ -540,18 +533,35 @@ class ParallelSelfAttention(nn.Module):
 
             if exists(mem):
                 offset += mem.get_pos_offset()
+                print("MEMORY OFFSET:", mem.get_pos_offset())
 
             if exists(layer_past) and layer_past.numel() > 0:
-                offset = layer_past[0].shape[0]
-                seq_len += offset
+                offset += layer_past[0].shape[0]
+
+            seq_len += offset
+
             cos, sin = self.rotary_emb(value_layer, seq_len=seq_len)
+            print("QR", query_rot.shape, "KR", key_rot.shape, "cos", cos.shape, "sin", sin.shape, "offset", offset)
             query_layer, key_layer = apply_rotary_fn(
                 query_rot, key_rot, cos, sin, offset=offset
             )
+            #print("QL", query_layer.shape, "QL2", query_layer2.shape, "KL", key_layer.shape, "KL2", key_layer2.shape)
 
             if exists(self.rotary_ndims):
                 query_layer = torch.cat((query_layer, query_pass), dim=-1)
                 key_layer = torch.cat((key_layer, key_pass), dim=-1)
+
+        if self.attention_type == "knn":
+            mem = self.memory.get_partition(self.training)
+            key_layer_to_mem = key_layer.clone().detach()
+            value_layer_to_mem = value_layer.clone().detach()
+            #query_layer_nopos = query_layer.clone().detach()
+
+            #if self.memory_kv_normalize:
+                #key_layer_nopos = l2norm(key_layer_nopos)
+                #value_layer_nopos = l2norm(value_layer_nopos)
+        else:
+            mem = None
 
         # ==================================
         # Cache key and value for inference
@@ -566,6 +576,8 @@ class ParallelSelfAttention(nn.Module):
 
         if self.get_key_value:
             present = torch.stack((key_layer, value_layer))
+
+        mem = self.memory.get_partition(self.training) if self.attention_type == "knn" else None
 
         if not self.sparse:
             sz_past_keys = past_key.size(0) if exists(layer_past) and layer_past.numel() > 0 else 0
@@ -656,7 +668,8 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            mem.add_memories(key_layer, value_layer, eod_markers)
+            mem.add_memories(key_layer_to_mem, key_layer_to_mem, eod_markers)
+            #mem.add_memories(key_layer.clone(), value_layer.clone(), eod_markers)
 
         # =================
         # Output. [sq, b, h]
