@@ -84,6 +84,7 @@ class _MemoryPartition:
         self.keys = None
         self.values = None
         self.first_token = None
+        self.pos_offset = 0
 
     def _sync(self):
         if self.memory_dumper is not None:
@@ -95,6 +96,10 @@ class _MemoryPartition:
             values: [sq, b, np, hn]
             eod_markers
         """
+
+        # adjust the offset to apply to the positional embedding
+
+        self.pos_offset += keys.shape[0] * keys.shape[1]
 
         # save the memories to the file, if requested
 
@@ -164,3 +169,6 @@ class _MemoryPartition:
 
     def is_empty(self):
         return self.keys is None
+
+    def get_pos_offset(self):
+        return self.pos_offset

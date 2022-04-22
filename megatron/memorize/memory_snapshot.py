@@ -91,6 +91,9 @@ class _MemorySnapshot:
     def is_empty(self):
         return False
 
+    def get_pos_offset(self):
+        return (self.all_keys[0].shape[0] if len(self.all_keys) > 0 else 0)
+
     def __del__(self):
         sorted_stats = {k: v for k, v in sorted(self.stats.items(), key=lambda item: -item[1])}
         print("[", self.layer_number, "]", sorted_stats)

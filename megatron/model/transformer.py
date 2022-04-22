@@ -506,13 +506,16 @@ class ParallelSelfAttention(nn.Module):
         )
 
         if self.attention_type == "knn":
-            key_layer_nopos = key_layer.clone().detach()
-            value_layer_nopos = value_layer.clone().detach()
-            query_layer_nopos = query_layer.clone().detach()
+            mem = self.memory.get_partition(self.training)
+            #key_layer_nopos = key_layer.clone().detach()
+            #value_layer_nopos = value_layer.clone().detach()
+            #query_layer_nopos = query_layer.clone().detach()
 
-            if self.memory_kv_normalize:
-                key_layer_nopos = l2norm(key_layer_nopos)
-                value_layer_nopos = l2norm(value_layer_nopos)
+            #if self.memory_kv_normalize:
+                #key_layer_nopos = l2norm(key_layer_nopos)
+                #value_layer_nopos = l2norm(value_layer_nopos)
+        else:
+            mem = None
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
@@ -534,6 +537,10 @@ class ParallelSelfAttention(nn.Module):
 
             seq_len = key_layer.shape[0]
             offset = 0
+
+            if exists(mem):
+                offset += mem.get_pos_offset()
+
             if exists(layer_past) and layer_past.numel() > 0:
                 offset = layer_past[0].shape[0]
                 seq_len += offset
@@ -560,8 +567,6 @@ class ParallelSelfAttention(nn.Module):
         if self.get_key_value:
             present = torch.stack((key_layer, value_layer))
 
-        mem = self.memory.get_partition(self.training) if self.attention_type == "knn" else None
-
         if not self.sparse:
             sz_past_keys = past_key.size(0) if exists(layer_past) and layer_past.numel() > 0 else 0
             sz_queries = query_layer.size(0)
@@ -581,7 +586,7 @@ class ParallelSelfAttention(nn.Module):
                 )
             elif self.attention_type == "knn" and not mem.is_empty():
                 # Extract keys and values from memory
-                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer_nopos, eod_markers)
+                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer, eod_markers)
 
                 if self.memory_kv_transform is not None:
                     if self.memory_kv_transform == "untied":
@@ -651,7 +656,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            mem.add_memories(key_layer_nopos, value_layer_nopos, eod_markers)
+            mem.add_memories(key_layer, value_layer, eod_markers)
 
         # =================
         # Output. [sq, b, h]
