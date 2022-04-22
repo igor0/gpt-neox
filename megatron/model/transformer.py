@@ -253,7 +253,7 @@ class ParallelSelfAttention(nn.Module):
         self.attention_type = neox_args.attention_config[layer_number]
 
         # TODO: this arg shouldn't need to be passed in - get from neox_args
-        if rotary and self.attention_type == "global":
+        if rotary:
             if neox_args.rotary_pct == 1:
                 self.rotary_ndims = None
             else:
@@ -506,14 +506,15 @@ class ParallelSelfAttention(nn.Module):
         )
 
         if self.attention_type == "knn":
-            cur_key_layer = key_layer.clone().detach()
-            cur_value_layer = value_layer.clone().detach()
+            key_layer_nopos = key_layer.clone().detach()
+            value_layer_nopos = value_layer.clone().detach()
+            query_layer_nopos = query_layer.clone().detach()
 
             if self.memory_kv_normalize:
-                cur_key_layer = l2norm(cur_key_layer)
-                cur_value_layer = l2norm(cur_value_layer)
+                key_layer_nopos = l2norm(key_layer_nopos)
+                value_layer_nopos = l2norm(value_layer_nopos)
 
-        if exists(self.rotary_emb) and self.attention_type != "global_nopos":
+        if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
                 # partial rotary
                 query_rot, query_pass = (
@@ -580,7 +581,7 @@ class ParallelSelfAttention(nn.Module):
                 )
             elif self.attention_type == "knn" and not mem.is_empty():
                 # Extract keys and values from memory
-                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer, eod_markers)
+                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer_nopos, eod_markers)
 
                 if self.memory_kv_transform is not None:
                     if self.memory_kv_transform == "untied":
@@ -602,7 +603,8 @@ class ParallelSelfAttention(nn.Module):
                 if self.memory_attn_mode == "concat":
                     # Add trained bias to the keys. The intent is to compensate for the lack of
                     # positional embedding.
-                    mem_keys = mem_keys + self.memory_key_bias
+                    if self.memory_key_bias != None:
+                        mem_keys = mem_keys + self.memory_key_bias
 
                     # Concat memories with attention so that attention heads can attend to both
                     context_layer = self.attention(
@@ -649,7 +651,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            mem.add_memories(cur_key_layer, cur_value_layer, eod_markers)
+            mem.add_memories(key_layer_nopos, value_layer_nopos, eod_markers)
 
         # =================
         # Output. [sq, b, h]

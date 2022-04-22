@@ -149,9 +149,13 @@ class EmbeddingPipe(Embedding):
             ]
             for tokens in input_ids.tolist()
         ]
-        #print("#########################################")
+
+        print("#########################################")
+        tokens = input_ids[0].tolist()
+        for i in range(len(tokens)):
+            print(i, "'" + self.tokenizer.detokenize([tokens[i]]) + "'")
         #print(self.tokenizer.detokenize(input_ids[0].tolist()))
-        #print("#########################################")
+        print("#########################################")
         #print("EOD", all_eod_markers)
         eod_markers = [
             (
