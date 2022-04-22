@@ -512,6 +512,7 @@ class ParallelSelfAttention(nn.Module):
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
+                exit(1) # XXX
                 # partial rotary
                 query_rot, query_pass = (
                     query_layer[..., : self.rotary_ndims],
@@ -533,7 +534,7 @@ class ParallelSelfAttention(nn.Module):
 
             if exists(mem):
                 offset += mem.get_pos_offset()
-                print("MEMORY OFFSET:", mem.get_pos_offset())
+                print("QQQ", "MEMOFFSET", mem.get_pos_offset(), "LAYER", self.layer_number)
 
             if exists(layer_past) and layer_past.numel() > 0:
                 offset += layer_past[0].shape[0]
@@ -541,27 +542,22 @@ class ParallelSelfAttention(nn.Module):
             seq_len += offset
 
             cos, sin = self.rotary_emb(value_layer, seq_len=seq_len)
-            print("QR", query_rot.shape, "KR", key_rot.shape, "cos", cos.shape, "sin", sin.shape, "offset", offset)
+
             query_layer, key_layer = apply_rotary_fn(
                 query_rot, key_rot, cos, sin, offset=offset
             )
-            #print("QL", query_layer.shape, "QL2", query_layer2.shape, "KL", key_layer.shape, "KL2", key_layer2.shape)
+
+            if self.layer_number == 5:
+                print("QQQ", "offset", offset, "mem", mem.get_pos_offset() if mem is not None else 0, "past", layer_past[0].shape[0] if exists(layer_past) and layer_past.numel() > 0 else 0)
 
             if exists(self.rotary_ndims):
+                exit(1) # XXX
                 query_layer = torch.cat((query_layer, query_pass), dim=-1)
                 key_layer = torch.cat((key_layer, key_pass), dim=-1)
 
         if self.attention_type == "knn":
-            mem = self.memory.get_partition(self.training)
             key_layer_to_mem = key_layer.clone().detach()
             value_layer_to_mem = value_layer.clone().detach()
-            #query_layer_nopos = query_layer.clone().detach()
-
-            #if self.memory_kv_normalize:
-                #key_layer_nopos = l2norm(key_layer_nopos)
-                #value_layer_nopos = l2norm(value_layer_nopos)
-        else:
-            mem = None
 
         # ==================================
         # Cache key and value for inference
@@ -577,8 +573,6 @@ class ParallelSelfAttention(nn.Module):
         if self.get_key_value:
             present = torch.stack((key_layer, value_layer))
 
-        mem = self.memory.get_partition(self.training) if self.attention_type == "knn" else None
-
         if not self.sparse:
             sz_past_keys = past_key.size(0) if exists(layer_past) and layer_past.numel() > 0 else 0
             sz_queries = query_layer.size(0)
@@ -592,6 +586,13 @@ class ParallelSelfAttention(nn.Module):
                 assert attention_mask.shape == (1, 1, 1, sz_keys)
                 assert (~attention_mask).all()
 
+            if self.layer_number == 5:
+                print("QQQ", offset, query_layer.shape)
+                for i in range(query_layer.shape[0]):
+                    #print("QQQ",query_layer[i,0,0,:8].detach())
+                    print("QQQ", offset + i, query_layer[i,:,:,:].shape, torch.round(100.0 * query_layer[i,0,0,:8]) / 100.0)
+
+
             if self.attention_type != "knn" or mem.is_empty():
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
@@ -600,28 +601,28 @@ class ParallelSelfAttention(nn.Module):
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer, eod_markers)
 
-                if self.memory_kv_transform is not None:
-                    if self.memory_kv_transform == "untied":
-                        kv_sq = mem_keys.shape[2]
-                        mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
-                        mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
+                #if self.memory_kv_transform is not None:
+                #    if self.memory_kv_transform == "untied":
+                #        kv_sq = mem_keys.shape[2]
+                #        mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
+                #        mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
 
-                        mem_keys = self.memory_key_transform(mem_keys)
-                        mem_vals = self.memory_value_transform(mem_vals)
+                #        mem_keys = self.memory_key_transform(mem_keys)
+                #        mem_vals = self.memory_value_transform(mem_vals)
 
-                        mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                        mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                    elif self.memory_kv_transform == "tied":
-                        mem_keys = self.memory_key_transform(mem_keys)
-                        mem_vals = self.memory_value_transform(mem_vals)
-                    else:
-                        raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
+                #        mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                #        mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
+                #    elif self.memory_kv_transform == "tied":
+                #        mem_keys = self.memory_key_transform(mem_keys)
+                #        mem_vals = self.memory_value_transform(mem_vals)
+                #    else:
+                #        raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
 
                 if self.memory_attn_mode == "concat":
                     # Add trained bias to the keys. The intent is to compensate for the lack of
                     # positional embedding.
-                    if self.memory_key_bias != None:
-                        mem_keys = mem_keys + self.memory_key_bias
+                    #if self.memory_key_bias != None:
+                    #    mem_keys = mem_keys + self.memory_key_bias
 
                     # Concat memories with attention so that attention heads can attend to both
                     context_layer = self.attention(
@@ -668,8 +669,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.attention_type == "knn":
-            mem.add_memories(key_layer_to_mem, key_layer_to_mem, eod_markers)
-            #mem.add_memories(key_layer.clone(), value_layer.clone(), eod_markers)
+            mem.add_memories(key_layer_to_mem, value_layer_to_mem, eod_markers)
 
         # =================
         # Output. [sq, b, h]

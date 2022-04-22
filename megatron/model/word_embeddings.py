@@ -150,11 +150,11 @@ class EmbeddingPipe(Embedding):
             for tokens in input_ids.tolist()
         ]
 
-        if False:
+        if True:
             print("#########################################")
             tokens = input_ids[0].tolist()
             for i in range(len(tokens)):
-                print(i, "'" + self.tokenizer.detokenize([tokens[i]]) + "'")
+                print("QQQ", "TOKEN", "'" + self.tokenizer.detokenize([tokens[i]]) + "'")
             #print(self.tokenizer.detokenize(input_ids[0].tolist()))
             print("#########################################")
             #print("EOD", all_eod_markers)
