@@ -307,6 +307,11 @@ class ParallelSelfAttention(nn.Module):
             parallel_output=parallel_output,
         )
 
+        if neox_args.memory_load is not None and not neox_args.memorize_on:
+            self.memory_offset = 136 # XXX HACK
+        else:
+            self.memory_offset = 0
+
         if self.attention_type == "knn":
             self.memory_kv_normalize = neox_args.memory_kv_normalize
             self.memory_kv_transform = neox_args.memory_kv_transform
@@ -483,6 +488,8 @@ class ParallelSelfAttention(nn.Module):
         )
 
     def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
+        LAYER_DEBUG = 0
+
         # hidden_states: [sq, b, h]
         # layer_past: [kv, sk, b, np, hn]
 
@@ -534,7 +541,11 @@ class ParallelSelfAttention(nn.Module):
 
             if exists(mem):
                 offset += mem.get_pos_offset()
-                print("QQQ", "MEMOFFSET", mem.get_pos_offset(), "LAYER", self.layer_number)
+                #print("QQQ", "MEMOFFSET", mem.get_pos_offset(), "LAYER", self.layer_number)
+            else:
+                #offset += self.memory_offset
+                #print("QQQ", "MEMOFFSETHACK", self.memory_offset, "LAYER", self.layer_number)
+                pass
 
             if exists(layer_past) and layer_past.numel() > 0:
                 offset += layer_past[0].shape[0]
@@ -547,8 +558,8 @@ class ParallelSelfAttention(nn.Module):
                 query_rot, key_rot, cos, sin, offset=offset
             )
 
-            if self.layer_number == 5:
-                print("QQQ", "offset", offset, "mem", mem.get_pos_offset() if mem is not None else 0, "past", layer_past[0].shape[0] if exists(layer_past) and layer_past.numel() > 0 else 0)
+            #if self.layer_number == LAYER_DEBUG:
+                #print("QQQ", "offset", offset, "mem", mem.get_pos_offset() if mem is not None else 0, "past", layer_past[0].shape[0] if exists(layer_past) and layer_past.numel() > 0 else 0)
 
             if exists(self.rotary_ndims):
                 exit(1) # XXX
@@ -586,7 +597,7 @@ class ParallelSelfAttention(nn.Module):
                 assert attention_mask.shape == (1, 1, 1, sz_keys)
                 assert (~attention_mask).all()
 
-            if self.layer_number == 5:
+            if self.layer_number == LAYER_DEBUG:
                 print("QQQ", offset, query_layer.shape)
                 for i in range(query_layer.shape[0]):
                     #print("QQQ",query_layer[i,0,0,:8].detach())
@@ -660,6 +671,11 @@ class ParallelSelfAttention(nn.Module):
 
         # [b, np, sq, hn] --> [sq, b, np, hn]
         context_layer = context_layer.permute(2, 0, 1, 3).contiguous()
+
+        if self.layer_number == LAYER_DEBUG:
+            for i in range(query_layer.shape[0]):
+                #print("QQQ",query_layer[i,0,0,:8].detach())
+                print("QQQ", "VALUE", offset + i, context_layer[i,:,:,:].shape, torch.round(100.0 * context_layer[i,0,0,:8]) / 100.0)
 
         # [sq, b, np, hn] --> [sq, b, hp]
         new_context_layer_shape = context_layer.size()[:-2] + (
