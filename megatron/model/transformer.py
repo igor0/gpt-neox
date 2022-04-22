@@ -253,7 +253,7 @@ class ParallelSelfAttention(nn.Module):
         self.attention_type = neox_args.attention_config[layer_number]
 
         # TODO: this arg shouldn't need to be passed in - get from neox_args
-        if rotary and self.attention_type == "global":
+        if rotary:
             if neox_args.rotary_pct == 1:
                 self.rotary_ndims = None
             else:
@@ -272,7 +272,7 @@ class ParallelSelfAttention(nn.Module):
         else:
             self.rotary_emb = None
 
-        self.sparse = not self.attention_type.startswith("global") and self.attention_type != "knn"
+        self.sparse = not self.attention_type.startswith("global") and not self.is_knn()
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -307,7 +307,7 @@ class ParallelSelfAttention(nn.Module):
             parallel_output=parallel_output,
         )
 
-        if self.attention_type == "knn":
+        if self.is_knn():
             self.memory_kv_normalize = neox_args.memory_kv_normalize
             self.memory_kv_transform = neox_args.memory_kv_transform
             self.memory_attn_mode = neox_args.memory_attn_mode
@@ -505,16 +505,20 @@ class ParallelSelfAttention(nn.Module):
             mixed_x_layer, 3
         )
 
-        if self.attention_type == "knn":
-            cur_key_layer = key_layer.clone().detach()
-            cur_value_layer = value_layer.clone().detach()
+        if self.is_knn():
+            mem = self.memory.get_partition(self.training)
 
-            if self.memory_kv_normalize:
-                cur_key_layer = l2norm(cur_key_layer)
-                cur_value_layer = l2norm(cur_value_layer)
+            if self.attention_type == "knn_nopos":
+                key_layer_to_mem = key_layer.clone().detach()
+                value_layer_to_mem = value_layer.clone().detach()
+                query_layer_to_mem = query_layer.clone().detach()
+        else:
+            mem = None
 
-        if exists(self.rotary_emb) and self.attention_type != "global_nopos":
+        if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
+                raise BaseException("Not supported.")
+
                 # partial rotary
                 query_rot, query_pass = (
                     query_layer[..., : self.rotary_ndims],
@@ -533,9 +537,15 @@ class ParallelSelfAttention(nn.Module):
 
             seq_len = key_layer.shape[0]
             offset = 0
+
+            if exists(mem):
+                offset += mem.get_pos_offset()
+
             if exists(layer_past) and layer_past.numel() > 0:
-                offset = layer_past[0].shape[0]
-                seq_len += offset
+                offset += layer_past[0].shape[0]
+
+            seq_len += offset
+
             cos, sin = self.rotary_emb(value_layer, seq_len=seq_len)
             query_layer, key_layer = apply_rotary_fn(
                 query_rot, key_rot, cos, sin, offset=offset
@@ -544,6 +554,11 @@ class ParallelSelfAttention(nn.Module):
             if exists(self.rotary_ndims):
                 query_layer = torch.cat((query_layer, query_pass), dim=-1)
                 key_layer = torch.cat((key_layer, key_pass), dim=-1)
+
+        if self.attention_type == "knn":
+            key_layer_to_mem = key_layer.clone().detach()
+            value_layer_to_mem = value_layer.clone().detach()
+            query_layer_to_mem = query_layer.clone().detach()
 
         # ==================================
         # Cache key and value for inference
@@ -559,8 +574,6 @@ class ParallelSelfAttention(nn.Module):
         if self.get_key_value:
             present = torch.stack((key_layer, value_layer))
 
-        mem = self.memory.get_partition(self.training) if self.attention_type == "knn" else None
-
         if not self.sparse:
             sz_past_keys = past_key.size(0) if exists(layer_past) and layer_past.numel() > 0 else 0
             sz_queries = query_layer.size(0)
@@ -574,13 +587,13 @@ class ParallelSelfAttention(nn.Module):
                 assert attention_mask.shape == (1, 1, 1, sz_keys)
                 assert (~attention_mask).all()
 
-            if self.attention_type != "knn" or mem.is_empty():
+            if not self.is_knn() or mem.is_empty():
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
-            elif self.attention_type == "knn" and not mem.is_empty():
+            elif self.is_knn() and not mem.is_empty():
                 # Extract keys and values from memory
-                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer, eod_markers)
+                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer_to_mem, eod_markers)
 
                 if self.memory_kv_transform is not None:
                     if self.memory_kv_transform == "untied":
@@ -602,7 +615,8 @@ class ParallelSelfAttention(nn.Module):
                 if self.memory_attn_mode == "concat":
                     # Add trained bias to the keys. The intent is to compensate for the lack of
                     # positional embedding.
-                    mem_keys = mem_keys + self.memory_key_bias
+                    if self.memory_key_bias != None:
+                        mem_keys = mem_keys + self.memory_key_bias
 
                     # Concat memories with attention so that attention heads can attend to both
                     context_layer = self.attention(
@@ -648,8 +662,8 @@ class ParallelSelfAttention(nn.Module):
         context_layer = context_layer.view(*new_context_layer_shape)
 
         # Store the memories
-        if self.attention_type == "knn":
-            mem.add_memories(cur_key_layer, cur_value_layer, eod_markers)
+        if self.is_knn():
+            mem.add_memories(key_layer_to_mem, value_layer_to_mem, eod_markers)
 
         # =================
         # Output. [sq, b, h]
@@ -662,6 +676,11 @@ class ParallelSelfAttention(nn.Module):
 
         return output, bias
 
+    def is_knn(self):
+        """
+        Whether distant KNN attention access is enabled
+        """
+        return self.attention_type == "knn" or self.attention_type == "knn_nopos"
 
 class ParallelTransformerLayer(nn.Module):
     """A single transformer layer.
