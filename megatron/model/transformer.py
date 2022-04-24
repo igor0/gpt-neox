@@ -538,7 +538,7 @@ class ParallelSelfAttention(nn.Module):
             seq_len = key_layer.shape[0]
             offset = 0
 
-            if exists(mem):
+            if exists(mem) and self.attention_type != "knn_nopos":
                 offset += mem.get_pos_offset()
 
             if exists(layer_past) and layer_past.numel() > 0:
@@ -619,6 +619,7 @@ class ParallelSelfAttention(nn.Module):
                         mem_keys = mem_keys + self.memory_key_bias
 
                     # Concat memories with attention so that attention heads can attend to both
+                    attention_mask = attention_mask.expand(mem_mask.shape[0], -1, -1, -1)
                     context_layer = self.attention(
                         query_layer,
                         torch.cat((mem_keys, key_layer)),
