@@ -76,13 +76,11 @@ class _MemoryPartition:
         self._clear()
 
     def _move_to(self, device):
-        if self.keys is not None:
-            self.keys = self.keys.to(device)
-            self.values = self.values.to(device)
+        if self.context is not None:
+            self.context = self.context.to(device)
 
     def _clear(self):
-        self.keys = None
-        self.values = None
+        self.context = None
         self.first_token = None
         self.pos_offset = 0
 
@@ -90,66 +88,64 @@ class _MemoryPartition:
         if self.memory_dumper is not None:
             self.memory_dumper.sync()
 
-    def add_memories(self, keys, values, eod_markers):
+    def add_memories(self, context, eod_markers):
         """
-            keys: [sq, b, np, hn]
-            values: [sq, b, np, hn]
+            context: [sq, b, h]
             eod_markers
         """
 
         # adjust the offset to apply to the positional embedding
 
-        self.pos_offset += keys.shape[0] * keys.shape[1]
+        self.pos_offset += context.shape[0] * context.shape[1]
 
         # save the memories to the file, if requested
 
-        if self.memory_dumper is not None:
-            self.memory_dumper.dump([
-                keys.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
-                values.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
-            ])
+        #if self.memory_dumper is not None:
+        #    self.memory_dumper.dump([
+        #        keys.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
+        #        values.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
+        #    ])
 
         # record the memories
 
-        if self.keys is None:
-            self.keys = keys
-            self.values = values
+        if self.context is None:
+            self.context = context
             self.valid_from = [0] * len(eod_markers)
             self.first_token = [0] * len(eod_markers)
         else:
-            self.keys = torch.cat((self.keys, keys), dim=0)
-            self.values = torch.cat((self.values, values), dim=0)
+            self.context = torch.cat((self.context, context), dim=0)
 
         # invalidate any memories before the newest EOD token
 
         for i in range(len(eod_markers)):
             # update the "first token"
-            self.first_token[i] = self.keys.shape[0] - keys.shape[0]
+            self.first_token[i] = self.context.shape[0] - context.shape[0]
 
             # if there are any EOD markers, invalidate the memories up to (but excluding) the last marker
             if eod_markers[i][0] <= eod_markers[i][1]:
-                self.valid_from[i] = self.keys.shape[0] - keys.shape[0] + eod_markers[i][1]
+                self.valid_from[i] = self.context.shape[0] - context.shape[0] + eod_markers[i][1]
 
         # drop some memories if we already have too much
 
-        if self.keys.shape[0] > self.memory_size:
+        if self.context.shape[0] > self.memory_size:
             # shift the window forward
-            removed_count = self.keys.shape[0] - self.memory_size
-            self.keys = self.keys[removed_count:]
-            self.values = self.values[removed_count:]
+            removed_count = self.context.shape[0] - self.memory_size
+            self.context = self.context[removed_count:]
 
             for i in range(len(eod_markers)):
                 self.valid_from[i] -= min(self.valid_from[i], removed_count)
                 self.first_token[i] -= removed_count
 
-    def get_memories(self, device, is_training, queries, eod_markers):
+    def get_memories(self, device, is_training, queries, eod_markers, qkv_func):
         # Mask away:
         #    - memorized keys from before EOS
         #    - queries from after EOS
 
+        _, keys, values = qkv_func(self.context)
+
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(
-            size=(self.keys.shape[1], 1, queries.shape[0], self.keys.shape[0]),
+            size=(keys.shape[1], 1, queries.shape[0], keys.shape[0]),
             fill_value=True,
             device=device)
 
@@ -165,10 +161,10 @@ class _MemoryPartition:
             else:
                 raise BaseException("Invalid memory_invalid_query_mode value", self.memory_invalid_query_mode)
 
-        return self.keys, self.values, memory_mask
+        return keys, values, memory_mask
 
     def is_empty(self):
-        return self.keys is None
+        return self.context is None
 
     def get_pos_offset(self):
         return self.pos_offset

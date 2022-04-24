@@ -225,6 +225,7 @@ class ParallelSelfAttention(nn.Module):
             neox_args.num_attention_heads, world_size
         )
         self.pos_emb = neox_args.pos_emb
+        self.memorize_mode = neox_args.memorize_mode
 
         # Strided linear layer.
         self.query_key_value = mpu.ColumnParallelLinear(
@@ -309,13 +310,12 @@ class ParallelSelfAttention(nn.Module):
 
         if self.is_knn():
             self.memory_kv_normalize = neox_args.memory_kv_normalize
-            self.memory_kv_transform = neox_args.memory_kv_transform
             self.memory_attn_mode = neox_args.memory_attn_mode
 
             # TODO: is the device guaranteed to be known at this point?
             device = torch.cuda.current_device()
 
-            if neox_args.memory_save is not None and neox_args.memorize_on:
+            if self.memorize_mode == "save":
                 Path(neox_args.memory_save).mkdir(exist_ok = True, parents = True)
                 def init_dumper(training):
                     if training:
@@ -335,44 +335,21 @@ class ParallelSelfAttention(nn.Module):
             else:
                 memory_dumper_init = None
 
-            if neox_args.memory_load is not None and not neox_args.memorize_on:
+            if self.memorize_mode == "load":
                 # Load precomputed memories from the specified index
-                self.memory = load_memory_snapshot(neox_args.memory_load, layer_number)
+                self.memory_snap = load_memory_snapshot(neox_args.memory_load, layer_number)
+                self.memory_train = None
             else:
                 # Maintain a sliding window of memories
-                self.memory = memorize.MemoryLive(
+                self.memory_train = memorize.MemoryLive(
                     device,
                     neox_args.memory_size,
                     neox_args.memory_invalid_query_mode,
                     memory_dumper_init = memory_dumper_init)
+                self.memory_snap = None
 
             if neox_args.memory_attn_mode == "sigmoid":
                 self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
-
-            if neox_args.memory_kv_transform != None:
-                if neox_args.memory_kv_transform == "untied":
-                    self.memory_key_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
-                    self.memory_value_transform = nn.Linear(neox_args.hidden_size, neox_args.hidden_size, bias=False)
-                elif neox_args.memory_kv_transform == "tied":
-                    self.memory_key_transform = nn.Linear(self.hidden_size_per_attention_head, self.hidden_size_per_attention_head, bias=False)
-                    self.memory_value_transform = nn.Linear(self.hidden_size_per_attention_head, self.hidden_size_per_attention_head, bias=False)
-                else:
-                    raise BaseException("Unknown memory_kv_transform", neox_args.memory_kv_transform)
-
-                if neox_args.memory_kv_transform_init == "eye_init":
-                    memory_kv_init = nn.init.eye_
-                elif neox_args.memory_kv_transform_init == "small_init":
-                    memory_kv_init = small_init_init_method(neox_args.hidden_size)
-                else:
-                    raise BaseException("Unknown memory_kv_transform_init", neox_args.memory_kv_transform_init)
-
-                memory_kv_init(self.memory_key_transform.weight)
-                memory_kv_init(self.memory_value_transform.weight)
-
-            if "memory_key_bias_48" in neox_args.memory_flags:
-                self.memory_key_bias = torch.nn.Parameter(torch.rand(neox_args.num_attention_heads, self.hidden_size_per_attention_head, dtype=torch.float16).cuda()/48)
-            else:
-                self.memory_key_bias = None
 
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask,
@@ -482,14 +459,7 @@ class ParallelSelfAttention(nn.Module):
             query_layer, key_layer, value_layer, attn_mask=attn_mask, rpe=rpe
         )
 
-    def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
-        # hidden_states: [sq, b, h]
-        # layer_past: [kv, sk, b, np, hn]
-
-        # =====================
-        # Query, Key, and Value
-        # =====================
-
+    def hidden_to_qkv(self, hidden_states):
         # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
         mixed_x_layer, _ = self.query_key_value(hidden_states)
 
@@ -504,16 +474,27 @@ class ParallelSelfAttention(nn.Module):
         (query_layer, key_layer, value_layer) = mpu.split_tensor_along_last_dim(
             mixed_x_layer, 3
         )
+        return query_layer, key_layer, value_layer
 
-        if self.is_knn():
-            mem = self.memory.get_partition(self.training)
+    def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
+        # hidden_states: [sq, b, h]
+        # layer_past: [kv, sk, b, np, hn]
+
+        # =====================
+        # Query, Key, and Value
+        # =====================
+
+        # [sq, b, h] --> 3 [sq, b, np, hn]
+        (query_layer, key_layer, value_layer) = self.hidden_to_qkv(hidden_states)
+
+        if self.is_knn() and self.memorize_mode == "train":
+            mem_train = self.memory_train.get_partition(self.training)
 
             if self.attention_type == "knn_nopos":
-                key_layer_to_mem = key_layer.clone().detach()
-                value_layer_to_mem = value_layer.clone().detach()
+                hidden_states_to_mem = hidden_states.clone().detach()
                 query_layer_to_mem = query_layer.clone().detach()
         else:
-            mem = None
+            mem_train = None
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
@@ -538,8 +519,8 @@ class ParallelSelfAttention(nn.Module):
             seq_len = key_layer.shape[0]
             offset = 0
 
-            if exists(mem) and self.attention_type != "knn_nopos":
-                offset += mem.get_pos_offset()
+            if exists(mem_train) and self.attention_type != "knn_nopos":
+                offset += mem_train.get_pos_offset()
 
             if exists(layer_past) and layer_past.numel() > 0:
                 offset += layer_past[0].shape[0]
@@ -556,9 +537,10 @@ class ParallelSelfAttention(nn.Module):
                 key_layer = torch.cat((key_layer, key_pass), dim=-1)
 
         if self.attention_type == "knn":
-            key_layer_to_mem = key_layer.clone().detach()
-            value_layer_to_mem = value_layer.clone().detach()
-            query_layer_to_mem = query_layer.clone().detach()
+            #key_layer_to_mem = key_layer.clone().detach()
+            #value_layer_to_mem = value_layer.clone().detach()
+            #query_layer_to_mem = query_layer.clone().detach()
+            raise ValueError("Not supported anymore.")
 
         # ==================================
         # Cache key and value for inference
@@ -587,37 +569,21 @@ class ParallelSelfAttention(nn.Module):
                 assert attention_mask.shape == (1, 1, 1, sz_keys)
                 assert (~attention_mask).all()
 
-            if not self.is_knn() or mem.is_empty():
+            if not self.is_knn() or mem_train.is_empty():
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
-            elif self.is_knn() and not mem.is_empty():
+            elif self.is_knn() and not mem_train.is_empty():
                 # Extract keys and values from memory
-                mem_keys, mem_vals, mem_mask = mem.get_memories(key_layer.device, self.training, query_layer_to_mem, eod_markers)
-
-                if self.memory_kv_transform is not None:
-                    if self.memory_kv_transform == "untied":
-                        kv_sq = mem_keys.shape[2]
-                        mem_keys = rearrange(mem_keys, 'b np sq sk -> b np (sq sk)')
-                        mem_vals = rearrange(mem_vals, 'b np sq sk -> b np (sq sk)')
-
-                        mem_keys = self.memory_key_transform(mem_keys)
-                        mem_vals = self.memory_value_transform(mem_vals)
-
-                        mem_keys = rearrange(mem_keys, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                        mem_vals = rearrange(mem_vals, 'b np (sq sk) -> b np sq sk', sq=kv_sq)
-                    elif self.memory_kv_transform == "tied":
-                        mem_keys = self.memory_key_transform(mem_keys)
-                        mem_vals = self.memory_value_transform(mem_vals)
-                    else:
-                        raise BaseException("Invalid value of memory_kv_transform", self.memory_kv_transform)
+                mem_keys, mem_vals, mem_mask = mem_train.get_memories(
+                    key_layer.device,
+                    self.training,
+                    query_layer_to_mem,
+                    eod_markers,
+                    lambda context: self.hidden_to_qkv(context)
+                )
 
                 if self.memory_attn_mode == "concat":
-                    # Add trained bias to the keys. The intent is to compensate for the lack of
-                    # positional embedding.
-                    if self.memory_key_bias != None:
-                        mem_keys = mem_keys + self.memory_key_bias
-
                     # Concat memories with attention so that attention heads can attend to both
                     attention_mask = attention_mask.expand(mem_mask.shape[0], -1, -1, -1)
                     context_layer = self.attention(
@@ -664,7 +630,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.is_knn():
-            mem.add_memories(key_layer_to_mem, value_layer_to_mem, eod_markers)
+            mem_train.add_memories(hidden_states_to_mem, eod_markers)
 
         # =================
         # Output. [sq, b, h]

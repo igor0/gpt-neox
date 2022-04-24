@@ -981,20 +981,6 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     Whether to normalize the keys and values before inserting into memory.
     """
 
-    memory_kv_transform: str = "untied"
-    """
-    Whether and how to transform the keys and values after retrieval from memory
-
-    Possible values: "untied" | "tied"| None
-    """
-
-    memory_kv_transform_init: str = "small_init"
-    """
-    How to initialize the memory_kv_transform weight matrix if untrained.
-
-    Possible values: "small_init" | "eye_init"
-    """
-
     memory_attn_mode: str = "concat"
     """
     How to combine local attention with distant attention.
@@ -1034,7 +1020,7 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     Text file to memorize, used by memorization code path (e.g., memorize.py)
     """
 
-    memorize_on: bool = False
+    memorize_mode: str = None
     """
-    Whether to memorize
+    train, load, or save
     """

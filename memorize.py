@@ -25,7 +25,7 @@ def main():
     Generate text/sample model
     """
     model, neox_args = setup_for_inference_or_eval(overwrite_values={
-        "memorize_on": True,
+        "memorize_mode": "save",
     })
     model.eval()
 
