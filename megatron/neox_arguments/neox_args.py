@@ -976,7 +976,7 @@ class NeoXArgsPythia(NeoXArgsTemplate):
 
 @dataclass
 class NeoXArgsMemory(NeoXArgsTemplate):
-    memory_kv_normalize: bool = True
+    memory_kq_normalize: bool = True
     """
     Whether to normalize the keys and values before inserting into memory.
     """

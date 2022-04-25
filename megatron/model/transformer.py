@@ -309,7 +309,7 @@ class ParallelSelfAttention(nn.Module):
         )
 
         if self.is_knn():
-            self.memory_kv_normalize = neox_args.memory_kv_normalize
+            self.memory_kq_normalize = neox_args.memory_kq_normalize
             self.memory_attn_mode = neox_args.memory_attn_mode
 
             # TODO: is the device guaranteed to be known at this point?
@@ -350,6 +350,11 @@ class ParallelSelfAttention(nn.Module):
 
             if neox_args.memory_attn_mode == "sigmoid":
                 self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
+
+            if "memory_key_bias_48" in neox_args.memory_flags:
+                self.memory_key_bias = torch.nn.Parameter(torch.rand(neox_args.num_attention_heads, self.hidden_size_per_attention_head, dtype=torch.float16).cuda()/48)
+            else:
+                self.memory_key_bias = None
 
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask,
@@ -584,6 +589,11 @@ class ParallelSelfAttention(nn.Module):
                 )
 
                 if self.memory_attn_mode == "concat":
+                    # Add trained bias to the keys. The intent is to compensate for the lack of
+                    # positional embedding.
+                    if self.memory_key_bias != None:
+                        mem_keys = mem_keys + self.memory_key_bias
+
                     # Concat memories with attention so that attention heads can attend to both
                     attention_mask = attention_mask.expand(mem_mask.shape[0], -1, -1, -1)
                     context_layer = self.attention(
