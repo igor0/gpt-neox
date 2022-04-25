@@ -356,8 +356,14 @@ class ParallelSelfAttention(nn.Module):
             else:
                 self.memory_key_bias = None
 
+            # [b, np, sq, sk]
+            penalty_value = -10
+            penalty_shape = (1, neox_args.num_attention_heads, 1, 1)
+            self.memory_penalty_factor = 100
+            self.memory_penalty = torch.nn.Parameter(torch.full(penalty_shape, penalty_value / self.memory_penalty_factor))
+
     def attention(
-        self, query_layer, key_layer, value_layer, layer_past, attention_mask,
+        self, query_layer, key_layer, value_layer, layer_past, attention_mask, penalty=None
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
@@ -408,6 +414,9 @@ class ParallelSelfAttention(nn.Module):
 
         if self.pos_emb == "alibi":
             attention_scores = self.alibi_embed(attention_scores)
+
+        if penalty != None:
+            attention_scores += penalty
 
         # attention scores and attention mask [b, np, sq, sk]
         attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
@@ -596,12 +605,16 @@ class ParallelSelfAttention(nn.Module):
 
                     # Concat memories with attention so that attention heads can attend to both
                     attention_mask = attention_mask.expand(mem_mask.shape[0], -1, -1, -1)
+                    penalty_mem = (self.memory_penalty_factor * self.memory_penalty).expand(-1, -1, -1, mem_keys.shape[0])
+                    penalty_zero = torch.full((1, penalty_mem.shape[1], 1, key_layer.shape[0]), 0, device=key_layer.device)
+
                     context_layer = self.attention(
                         query_layer,
                         torch.cat((mem_keys, key_layer)),
                         torch.cat((mem_vals, value_layer)),
                         None,
-                        torch.cat((mem_mask, attention_mask), dim=3)
+                        torch.cat((mem_mask, attention_mask), dim=3),
+                        penalty=torch.cat((penalty_mem, penalty_zero), dim=3)
                     )
                 elif self.memory_attn_mode == "sigmoid":
                     mem_context_layer = self.attention(
