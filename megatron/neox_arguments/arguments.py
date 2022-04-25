@@ -28,7 +28,6 @@ from .neox_args import (
     NeoXArgsParallelism,
     NeoXArgsLogging,
     NeoXArgsOther,
-    NeoXArgsPythia,
     NeoXArgsMemory,
     NeoXArgsTextgen,
     NeoXArgsOptimizer,
@@ -74,7 +73,6 @@ BASE_CLASSES = [
     NeoXArgsLogging,
     NeoXArgsTextgen,
     NeoXArgsOther,
-    NeoXArgsPythia,
     NeoXArgsMemory,
 ]
 

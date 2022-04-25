@@ -83,7 +83,16 @@ class Embedding(torch.nn.Module):
 
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
+
+        # Dummy parameter to enable training with parts of the model are frozen. Setting
+        # requires_grad==True on the residual path (e.g., attentions or MLPs) won't take an
+        # effect unless word_embedding has requires_grad==True. The dummy parameter achieves
+        # the same goal, while enabling the word embedding transform to stay frozen.
+        #
+        # TODO: better understand why this is needed.
         self.dummy = nn.Parameter(torch.ones(1))
+
+
         self.tokenizer = neox_args.tokenizer
 
     def add_tokentype_embeddings(self, num_tokentypes):
@@ -151,13 +160,12 @@ class EmbeddingPipe(Embedding):
         ]
 
         if False:
+            # This can be useful for debugging purposes.
             print("#########################################")
             tokens = input_ids[0].tolist()
             for i in range(len(tokens)):
                 print(i, "'" + self.tokenizer.detokenize([tokens[i]]) + "'")
-            #print(self.tokenizer.detokenize(input_ids[0].tolist()))
             print("#########################################")
-            #print("EOD", all_eod_markers)
 
         eod_markers = [
             (
@@ -208,7 +216,7 @@ class SoftEmbedding(torch.nn.Module):
     def forward(self, args: tuple):
         in_inference = len(args) == 3  # embeddings, layer_past, attention_mask
         in_train = len(args) == 2 # embeddings, attention_mask
-        raise BaseException("Not supported")
+        raise BaseException("Soft prompts are not supported in this branch.")
 
         if in_train:
             embedding, attention_mask = args

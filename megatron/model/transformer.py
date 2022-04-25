@@ -28,12 +28,10 @@ import torch.nn as nn
 from .norms import get_norm
 
 from einops import rearrange
-from contextlib import contextmanager
 from pathlib import Path
 from megatron import memorize
 from megatron import mpu
 from megatron.model.fused_softmax import FusedScaleMaskSoftmax
-from megatron.model.init_functions import small_init_init_method
 from megatron.model.activations import get_activation
 from megatron.model.utils import exists
 from megatron.model.positional_embeddings import (
@@ -312,7 +310,6 @@ class ParallelSelfAttention(nn.Module):
             self.memory_kq_normalize = neox_args.memory_kq_normalize
             self.memory_attn_mode = neox_args.memory_attn_mode
 
-            # TODO: is the device guaranteed to be known at this point?
             device = torch.cuda.current_device()
 
             if self.memorize_mode == "save":
@@ -534,6 +531,7 @@ class ParallelSelfAttention(nn.Module):
             offset = 0
 
             if exists(mem_train) and self.attention_type != "knn_nopos":
+				# Set aside positional embeddings for the memory
                 offset += mem_train.get_pos_offset()
 
             if exists(layer_past) and layer_past.numel() > 0:
@@ -551,9 +549,6 @@ class ParallelSelfAttention(nn.Module):
                 key_layer = torch.cat((key_layer, key_pass), dim=-1)
 
         if self.attention_type == "knn":
-            #key_layer_to_mem = key_layer.clone().detach()
-            #value_layer_to_mem = value_layer.clone().detach()
-            #query_layer_to_mem = query_layer.clone().detach()
             raise ValueError("Not supported anymore.")
 
         # ==================================
@@ -598,6 +593,10 @@ class ParallelSelfAttention(nn.Module):
                 )
 
                 if self.memory_attn_mode == "concat":
+					# Use a hybrid local-distant attention. Softmax will be applied across both
+					# local and distant logits, so that the attention head can attend locally
+					# as well as to the memorized entries.
+
                     # Add trained bias to the keys. The intent is to compensate for the lack of
                     # positional embedding.
                     if self.memory_key_bias != None:
@@ -617,6 +616,9 @@ class ParallelSelfAttention(nn.Module):
                         penalty=torch.cat((penalty_mem, penalty_zero), dim=3)
                     )
                 elif self.memory_attn_mode == "sigmoid":
+					# Use a sigmoid function to combine the local and distant attentions, like in
+					# https://arxiv.org/pdf/2203.08913.pdf.
+
                     mem_context_layer = self.attention(
                         query_layer,
                         mem_keys,
@@ -913,6 +915,3 @@ def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=Non
         return logits_parallel
 
     return mpu.gather_from_model_parallel_region(logits_parallel)
-
-def l2norm(t):
-    return F.normalize(t, dim = -1)

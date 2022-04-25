@@ -902,6 +902,15 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     """
 
     mem_friendly_batch: bool = False
+    """
+    Use memory-friendly batching, intended for training of memorizing transformers
+    (https://arxiv.org/pdf/2203.08913.pdf)
+    """
+
+    train_only: str = None
+    """
+    Only parameters whose names match the provided regular expression will be trained; all other parameters will be frozen.
+    """
 
 @dataclass
 class NeoXArgsTextgen(NeoXArgsTemplate):
@@ -966,14 +975,6 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
     Tasks to evaluate on using lm_eval_harness
     """
 
-    
-@dataclass
-class NeoXArgsPythia(NeoXArgsTemplate):
-    pythia_train_only: str = None
-    """
-    Only parameters whose names match the provided regular expression will be trained; all other parameters will be frozen.
-    """
-
 @dataclass
 class NeoXArgsMemory(NeoXArgsTemplate):
     memory_kq_normalize: bool = True
@@ -985,7 +986,7 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     """
     How to combine local attention with distant attention.
 
-    Possible values: "concat" | "sigmoid"
+    Possible values: "concat", "sigmoid"
     """
 
     memory_size: int = 4096
@@ -997,7 +998,7 @@ class NeoXArgsMemory(NeoXArgsTemplate):
     """
     How to populate the attention mask for tokens that follow an EOD token.
 
-    Possible values: "first_token" | "all_tokens"
+    Possible values: "first_token", "all_tokens"
     """
 
     memory_save: str = None
@@ -1022,5 +1023,13 @@ class NeoXArgsMemory(NeoXArgsTemplate):
 
     memorize_mode: str = None
     """
-    train, load, or save
+    How to use memory:
+
+        - load (inference): read static memories from memory_load path and use them during inference
+
+        - save (inference): generate memories dynamically during inference and save to memory_save path
+
+        - train (training): generate memories dynamically and use them to train the model with memorization enabled
+
+    Possible values: "load", "save", "train"
     """

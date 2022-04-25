@@ -37,8 +37,6 @@ from megatron.model.word_embeddings import EmbeddingPipe, SoftEmbedding
 from deepspeed.pipe import PipelineModule, LayerSpec, TiedLayerSpec
 from typing import Union, List
 
-from pathlib import Path
-
 def gpt2_attention_mask_func(attention_scores, ltor_mask):
     attention_scores.masked_fill_(ltor_mask, -10000.0)
     return attention_scores
@@ -75,9 +73,9 @@ def _pre_transformer_block(args):
     if in_inference:
         # we need to add a container to cache `presents` from each layer's forward pass
         # inputs/outputs are now (hidden_states, layer_past, presents, attention_mask)
-        fn = lambda x: (x[0].transpose(0, 1).contiguous(), x[1], torch.Tensor(), x[2], x[3])
+        fn = lambda x: (x[0].transpose(0, 1).contiguous(), x[1], torch.Tensor(), *x[2:])
     elif in_train:
-        fn = lambda x: (x[0].transpose(0, 1).contiguous(), x[1], x[2])
+        fn = lambda x: (x[0].transpose(0, 1).contiguous(), *x[1:])
     else:
         raise ValueError('Incorrect number of args in `_pre_transformer_block`')
     return fn(args)
@@ -100,6 +98,7 @@ def _post_transformer_block(args):
     else:
         raise ValueError('Incorrect number of args in `_post_transformer_block`')
     return fn(args)
+
 
 class GPT2ModelPipe(PipelineModule, torch.nn.Module):
     """GPT2Model adapted for pipeline parallelism.

@@ -170,10 +170,6 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
         tokens, tokenizer.eod, neox_args.eod_mask_loss
     )
 
-    #print("############################################")
-    #print(tokenizer.detokenize(tokens_[0].tolist()))
-    #print("############################################")
-
     return tokens, labels, loss_mask, attention_mask, position_ids
 
 
@@ -269,9 +265,9 @@ def get_model(neox_args, inference=False, get_key_value=True):
             if not "soft_embedding" in name:
                 param.requires_grad = False
 
-    if neox_args.pythia_train_only is not None:
+    if neox_args.train_only is not None:
         print('Parameters:')
-        param_regex = re.compile(neox_args.pythia_train_only)
+        param_regex = re.compile(neox_args.train_only)
         for name, param in model.named_parameters():
             param.requires_grad = (param_regex.search(name) is not None)
             print(f'    {name} requires_grad={param.requires_grad}')
@@ -588,17 +584,16 @@ def train(
     noise_scale_logger = get_noise_scale_logger(neox_args)
 
     # Initial eval
-    if True:
-        evaluate_and_print_results(
-            neox_args=neox_args,
-            prefix="initial eval",
-            forward_step_func=forward_step,
-            data_iterator=iter(valid_data_loader),
-            model=model,
-            iteration=iteration,
-            verbose=False,
-            timers=timers,
-        )
+    evaluate_and_print_results(
+        neox_args=neox_args,
+        prefix="initial eval",
+        forward_step_func=forward_step,
+        data_iterator=iter(valid_data_loader),
+        model=model,
+        iteration=iteration,
+        verbose=False,
+        timers=timers,
+    )
 
     # to monitor if we've skipped many iterations in a row and trigger an early exit
     overflow_monitor = OverflowMonitor(optimizer)

@@ -199,16 +199,16 @@ class model_transform:
             #   2.{input_layernorm,attention,post_attention,mlp}
             #   4.norm
             #   5.final_linear
-            conf['pythia_train_only'] = r'^{}\.norm'.format(self.max_layer_id - 1)
+            conf['train_only'] = r'^{}\.norm'.format(self.max_layer_id - 1)
         elif self.args.mode == 'out_linear_all':
-            conf['pythia_train_only'] = r'attention\.dense|dense_4h_to_h|extra_linear'
+            conf['train_only'] = r'attention\.dense|dense_4h_to_h|extra_linear'
         elif self.args.mode == 'in_linear_all':
-            conf['pythia_train_only'] = r'attention\.query_key_value|mlp\.dense_h_to_4h'
+            conf['train_only'] = r'attention\.query_key_value|mlp\.dense_h_to_4h'
         elif self.args.mode == 'all' or self.args.mode == 'all_100k' or self.args.mode is None:
-            if 'pythia_train_only' in conf:
-                del conf['pythia_train_only']
+            if 'train_only' in conf:
+                del conf['train_only']
         else:
-            conf['pythia_train_only'] = self.args.mode
+            conf['train_only'] = self.args.mode
 
         if enable_extra_linear(self.args):
             conf['pythia_extra_linear'] =  True
