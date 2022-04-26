@@ -9,13 +9,15 @@ def canonicalize_args(args):
     args.new_model_path = os.path.abspath(args.new_model_path)
     if args.head is not None:
         args.head = os.path.abspath(args.head)
+    if args.predict == 'next':
+        args.predict = None
     return args
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, default="extra_linear", choices=['logit_lens', 'extra_linear', 'final_linear', 'final_norm', 'out_linear_all', 'in_linear_all', 'all', 'all_100k', 'pre_logit_lens', 'pre_extra_linear'])
     parser.add_argument("--head", type=str)
-    parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink', 'next2', 'prev2'])
+    parser.add_argument("--predict", type=str, choices=['self', 'abs', 'abslog', 'abssqrt', 'prev', 'sink', 'next2', 'prev2', 'next'])
     parser.add_argument("--num_layers", type=int)
     parser.add_argument("--masterport", type=int)
     parser.add_argument("--seed", type=int)
