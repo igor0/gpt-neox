@@ -356,7 +356,7 @@ class ParallelSelfAttention(nn.Module):
             # [b, np, sq, sk]
             penalty_value = -10
             penalty_shape = (1, neox_args.num_attention_heads, 1, 1)
-            self.memory_penalty_factor = 100
+            self.memory_penalty_factor = 10
             self.memory_penalty = torch.nn.Parameter(torch.full(penalty_shape, penalty_value / self.memory_penalty_factor))
 
     def attention(
