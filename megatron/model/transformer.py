@@ -470,9 +470,9 @@ class ParallelSelfAttention(nn.Module):
             query_layer, key_layer, value_layer, attn_mask=attn_mask, rpe=rpe
         )
 
-    def hidden_to_qkv(self, hidden_states):
+    def hidden_to_qkv(self, hidden_states, qkv):
         # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
-        mixed_x_layer, _ = self.query_key_value(hidden_states)
+        mixed_x_layer, _ = qkv(hidden_states)
 
         # [sq, b, (np * 3 * hn)] --> [sq, b, np, 3 * hn]
         new_tensor_shape = mixed_x_layer.size()[:-1] + (
@@ -496,14 +496,15 @@ class ParallelSelfAttention(nn.Module):
         # =====================
 
         # [sq, b, h] --> 3 [sq, b, np, hn]
-        (query_layer, key_layer, value_layer) = self.hidden_to_qkv(hidden_states)
+        (query_layer, key_layer, value_layer) = self.hidden_to_qkv(hidden_states, self.query_key_value)
 
         if self.is_knn() and self.memorize_mode == "train":
             mem_train = self.memory_train.get_partition(self.training)
 
-            if self.attention_type == "knn_nopos":
+            if not self.knn_use_pos_emb():
                 hidden_states_to_mem = hidden_states.clone().detach()
-                query_layer_to_mem = query_layer.clone().detach()
+                if self.attention_type == "knn_nopos"
+                    query_layer_to_mem = query_layer.clone().detach()
         else:
             mem_train = None
 
@@ -583,41 +584,19 @@ class ParallelSelfAttention(nn.Module):
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
             elif self.is_knn() and not mem_train.is_empty():
-                # Extract keys and values from memory
-                mem_keys, mem_vals, mem_mask = mem_train.get_memories(
-                    key_layer.device,
-                    self.training,
-                    query_layer_to_mem,
-                    eod_markers,
-                    lambda context: self.hidden_to_qkv(context)
-                )
-
-                if self.memory_attn_mode == "concat":
-					# Use a hybrid local-distant attention. Softmax will be applied across both
-					# local and distant logits, so that the attention head can attend locally
-					# as well as to the memorized entries.
-
-                    # Add trained bias to the keys. The intent is to compensate for the lack of
-                    # positional embedding.
-                    if self.memory_key_bias != None:
-                        mem_keys = mem_keys + self.memory_key_bias
-
-                    # Concat memories with attention so that attention heads can attend to both
-                    attention_mask = attention_mask.expand(mem_mask.shape[0], -1, -1, -1)
-                    penalty_mem = (self.memory_penalty_factor * self.memory_penalty).expand(-1, -1, -1, mem_keys.shape[0])
-                    penalty_zero = torch.full((1, penalty_mem.shape[1], 1, key_layer.shape[0]), 0, device=key_layer.device)
-
-                    context_layer = self.attention(
-                        query_layer,
-                        torch.cat((mem_keys, key_layer)),
-                        torch.cat((mem_vals, value_layer)),
-                        None,
-                        torch.cat((mem_mask, attention_mask), dim=3),
-                        penalty=torch.cat((penalty_mem, penalty_zero), dim=3)
+                if self.attention_type == "knn_both":
+                    local_context_layer = self.attention(
+                        query_layer, key_layer, value_layer, layer_past, attention_mask,
                     )
-                elif self.memory_attn_mode == "sigmoid":
-					# Use a sigmoid function to combine the local and distant attentions, like in
-					# https://arxiv.org/pdf/2203.08913.pdf.
+
+                    # Extract keys and values from memory
+                    mem_keys, mem_vals, mem_mask = mem_train.get_memories(
+                        key_layer.device,
+                        self.training,
+                        None,
+                        eod_markers,
+                        lambda context: self.hidden_to_qkv(context, self.query_key_value_mem)
+                    )
 
                     mem_context_layer = self.attention(
                         query_layer,
@@ -626,18 +605,62 @@ class ParallelSelfAttention(nn.Module):
                         None,
                         torch.cat(mem_mask))
 
-                    local_context_layer = self.attention(
-                        query_layer,
-                        key_layer,
-                        value_layer,
-                        layer_past,
-                        attention_mask)
-
-                    # Use sigmoid to combine memories with attention
-                    gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
-                    context_layer = local_context_layer * gate + mem_context_layer * (1 - gate)
                 else:
-                    raise BaseException("Unknown memory_attn_mode", neox_args.memory_attn_mode)
+                    # Extract keys and values from memory
+                    mem_keys, mem_vals, mem_mask = mem_train.get_memories(
+                        key_layer.device,
+                        self.training,
+                        query_layer_to_mem,
+                        eod_markers,
+                        lambda context: self.hidden_to_qkv(context, self.query_key_value)
+                    )
+
+                    if self.memory_attn_mode == "concat":
+                        # Use a hybrid local-distant attention. Softmax will be applied across both
+                        # local and distant logits, so that the attention head can attend locally
+                        # as well as to the memorized entries.
+
+                        # Add trained bias to the keys. The intent is to compensate for the lack of
+                        # positional embedding.
+                        if self.memory_key_bias != None:
+                            mem_keys = mem_keys + self.memory_key_bias
+
+                        # Concat memories with attention so that attention heads can attend to both
+                        attention_mask = attention_mask.expand(mem_mask.shape[0], -1, -1, -1)
+                        penalty_mem = (self.memory_penalty_factor * self.memory_penalty).expand(-1, -1, -1, mem_keys.shape[0])
+                        penalty_zero = torch.full((1, penalty_mem.shape[1], 1, key_layer.shape[0]), 0, device=key_layer.device)
+
+                        context_layer = self.attention(
+                            query_layer,
+                            torch.cat((mem_keys, key_layer)),
+                            torch.cat((mem_vals, value_layer)),
+                            None,
+                            torch.cat((mem_mask, attention_mask), dim=3),
+                            penalty=torch.cat((penalty_mem, penalty_zero), dim=3)
+                        )
+                    elif self.memory_attn_mode == "sigmoid":
+                        # Use a sigmoid function to combine the local and distant attentions, like in
+                        # https://arxiv.org/pdf/2203.08913.pdf.
+
+                        mem_context_layer = self.attention(
+                            query_layer,
+                            mem_keys,
+                            mem_vals,
+                            None,
+                            torch.cat(mem_mask))
+
+                        local_context_layer = self.attention(
+                            query_layer,
+                            key_layer,
+                            value_layer,
+                            layer_past,
+                            attention_mask)
+
+                        # Use sigmoid to combine memories with attention
+                        gate = (self.combine_attn_output_gate * 1000.0).sigmoid()
+                        context_layer = local_context_layer * gate + mem_context_layer * (1 - gate)
+                    else:
+                        raise BaseException("Unknown memory_attn_mode", neox_args.memory_attn_mode)
 
         else:
             context_layer = self.sparse_attention(
@@ -672,7 +695,12 @@ class ParallelSelfAttention(nn.Module):
         """
         Whether distant KNN attention access is enabled
         """
-        return self.attention_type == "knn" or self.attention_type == "knn_nopos"
+        return self.attention_type == "knn"
+            or self.attention_type == "knn_nopos"
+            or self.attention_type == "knn_both"
+
+    def knn_use_pos_emb(self):
+        return not self.attention_type == "knn_nopos"
 
 class ParallelTransformerLayer(nn.Module):
     """A single transformer layer.
