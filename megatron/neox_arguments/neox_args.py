@@ -22,6 +22,7 @@ ATTENTION_TYPE_CHOICES = [
     "amlp",
     "knn",
     "knn_nopos",
+    "knn_both",
 ]
 
 
