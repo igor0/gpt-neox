@@ -490,7 +490,7 @@ class ParallelSelfAttention(nn.Module):
             query_layer, key_layer, value_layer, attn_mask=attn_mask, rpe=rpe
         )
 
-    def hidden_to_qkv(self, hidden_states, qkv):
+    def hidden_to_qkv(self, hidden_states, qkv, normalize=False):
         # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
         mixed_x_layer, _ = qkv(hidden_states)
 
@@ -505,6 +505,9 @@ class ParallelSelfAttention(nn.Module):
         (query_layer, key_layer, value_layer) = mpu.split_tensor_along_last_dim(
             mixed_x_layer, 3
         )
+        if normalize:
+            query_layer = l2norm(query_layer)
+            key_layer = l2norm(key_layer)
         return query_layer, key_layer, value_layer
 
     def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
@@ -600,11 +603,14 @@ class ParallelSelfAttention(nn.Module):
             else:
                 assert self.attention_type == "knn_both"
 
+                # TODO: optionally, use cosine distance
+                should_normalize=False
+
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
 
-                mem_query, _, _ = self.hidden_to_qkv(hidden_states, self.query_key_value_mem)
+                mem_query, _, _ = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=should_normalize)
 
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem_train.get_memories(
@@ -612,7 +618,7 @@ class ParallelSelfAttention(nn.Module):
                     self.training,
                     mem_query,
                     eod_markers,
-                    lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem)
+                    lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=should_normalize)
                 )
 
                 mem_context_layer = self.attention(
@@ -910,3 +916,6 @@ def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=Non
         return logits_parallel
 
     return mpu.gather_from_model_parallel_region(logits_parallel)
+
+def l2norm(t):
+    return F.normalize(t, dim = -1)
