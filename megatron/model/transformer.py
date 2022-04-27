@@ -315,6 +315,17 @@ class ParallelSelfAttention(nn.Module):
             parallel_output=parallel_output,
         )
 
+        self.dense_mem = mpu.RowParallelLinear(
+            neox_args=neox_args,
+            input_size=neox_args.hidden_size,
+            output_size=neox_args.hidden_size,
+            input_is_parallel=True,
+            init_method=output_layer_init_method,
+            skip_bias_add=True,
+            parallel_output=parallel_output,
+        )
+
+
         if self.is_knn():
             self.memory_kq_normalize = neox_args.memory_kq_normalize
             self.memory_attn_mode = neox_args.memory_attn_mode
@@ -585,10 +596,11 @@ class ParallelSelfAttention(nn.Module):
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
+                mem_context_layer = None
             else:
                 assert self.attention_type == "knn_both"
 
-                local_context_layer = self.attention(
+                context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
 
@@ -606,13 +618,29 @@ class ParallelSelfAttention(nn.Module):
                 mem_context_layer = self.attention(
                     mem_query, mem_keys, mem_vals, None, mem_mask
                 )
-
-                context_layer = 0.8 * local_context_layer + 0.2 * mem_context_layer
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask
             )
+            mem_context_layer = None
 
+        # Store the memories
+        if self.is_knn():
+            mem_train.add_memories(hidden_states_to_mem, eod_markers)
+
+        output, bias = self.densify(context_layer, self.dense)
+
+        if mem_context_layer is not None:
+            mem_output, mem_bias = self.densify(mem_context_layer, self.dense_mem)
+            output = output + mem_output
+            bias = bias + mem_bias
+
+        if self.get_key_value:
+            output = [output, present]
+
+        return output, bias
+
+    def densify(self, context_layer, dense):
         # [b, np, sq, hn] --> [sq, b, np, hn]
         context_layer = context_layer.permute(2, 0, 1, 3).contiguous()
 
@@ -621,21 +649,14 @@ class ParallelSelfAttention(nn.Module):
             self.hidden_size_per_partition,
         )
         context_layer = context_layer.view(*new_context_layer_shape)
-
-        # Store the memories
-        if self.is_knn():
-            mem_train.add_memories(hidden_states_to_mem, eod_markers)
-
-        # =================
+       # =================
         # Output. [sq, b, h]
         # =================
 
         output, bias = self.dense(context_layer)
 
-        if self.get_key_value:
-            output = [output, present]
-
         return output, bias
+
 
     def is_knn(self):
         """
