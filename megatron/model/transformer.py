@@ -604,7 +604,7 @@ class ParallelSelfAttention(nn.Module):
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
 
-                mem_query, _, _ = self.hidden_to_qkv(hidden_states, self.query_key_value_mem)
+                mem_query, _, _ = self.hidden_to_qkv(hidden_states.clone().detach(), self.query_key_value_mem)
 
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem_train.get_memories(
