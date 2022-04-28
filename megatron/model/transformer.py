@@ -610,7 +610,7 @@ class ParallelSelfAttention(nn.Module):
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
 
-                mem_query, _, _ = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
+                mem_query, key_layer2, value_layer2 = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
 
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem_train.get_memories(
@@ -622,7 +622,11 @@ class ParallelSelfAttention(nn.Module):
                 )
 
                 mem_context_layer = self.attention(
-                    mem_query, mem_keys, mem_vals, None, mem_mask
+                    mem_query,
+                    torch.cat((mem_keys, key_layer2)),
+                    torch.cat((mem_vals, value_layer2)),
+                    None,
+                    torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)), dim=3)
                 )
         else:
             context_layer = self.sparse_attention(
