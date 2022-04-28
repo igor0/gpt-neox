@@ -240,6 +240,10 @@ class ParallelSelfAttention(nn.Module):
             coeff = max(1, self.layer_number)
             self.norm_factor *= coeff
 
+        self.mem_coeff = nn.Parameter(
+            torch.ones(self.num_attention_heads_per_partition, 1, 1) * math.log(20)
+        )
+
         self.rpe = rpe
 
         if self.pos_emb == "alibi":
@@ -304,6 +308,18 @@ class ParallelSelfAttention(nn.Module):
             # on average it should not be partition dependent.
             self.attention_dropout = nn.Dropout(neox_args.attention_dropout)
 
+        if self.is_knn():
+            self.mem_scale_mask_softmax = FusedScaleMaskSoftmax(
+                input_in_fp16=self.fp16,
+                input_in_bf16=self.bf16,
+                upper_triang_mask_fusion=neox_args.scaled_upper_triang_masked_softmax_fusion,
+                general_mask_fusion=neox_args.scaled_masked_softmax_fusion,
+                mask_func=self.attention_mask_func,
+                softmax_in_fp32=True,
+                scale=self.mem_coeff,
+            )
+            print("XXX", "USING COEFF FOR MEM SOFTMAX:", self.mem_coeff)
+
         # Output.
         self.dense = mpu.RowParallelLinear(
             neox_args=neox_args,
@@ -324,7 +340,6 @@ class ParallelSelfAttention(nn.Module):
             skip_bias_add=True,
             parallel_output=parallel_output,
         )
-
 
         if self.is_knn():
             self.memory_kq_normalize = neox_args.memory_kq_normalize
@@ -373,14 +388,8 @@ class ParallelSelfAttention(nn.Module):
             else:
                 self.memory_key_bias = None
 
-            # [b, np, sq, sk]
-            penalty_value = -10
-            penalty_shape = (1, neox_args.num_attention_heads, 1, 1)
-            self.memory_penalty_factor = 10
-            self.memory_penalty = torch.nn.Parameter(torch.full(penalty_shape, penalty_value / self.memory_penalty_factor))
-
     def attention(
-        self, query_layer, key_layer, value_layer, layer_past, attention_mask, penalty=None
+        self, query_layer, key_layer, value_layer, layer_past, attention_mask, softmax,
     ):
         # ===================================
         # Raw attention scores. [b, np, s, s]
@@ -432,11 +441,8 @@ class ParallelSelfAttention(nn.Module):
         if self.pos_emb == "alibi":
             attention_scores = self.alibi_embed(attention_scores)
 
-        if penalty != None:
-            attention_scores += penalty
-
         # attention scores and attention mask [b, np, sq, sk]
-        attention_probs = self.scale_mask_softmax(attention_scores, attention_mask)
+        attention_probs = softmax(attention_scores, attention_mask)
 
         # This is actually dropping out entire tokens to attend to, which might
         # seem a bit unusual, but is taken from the original Transformer paper.
@@ -597,7 +603,7 @@ class ParallelSelfAttention(nn.Module):
 
             if not self.is_knn() or mem_train.is_empty():
                 context_layer = self.attention(
-                    query_layer, key_layer, value_layer, layer_past, attention_mask,
+                    query_layer, key_layer, value_layer, layer_past, attention_mask, self.scale_mask_softmax,
                 )
                 mem_context_layer = None
             else:
@@ -607,7 +613,7 @@ class ParallelSelfAttention(nn.Module):
                 use_cosine_sim=False
 
                 context_layer = self.attention(
-                    query_layer, key_layer, value_layer, layer_past, attention_mask,
+                    query_layer, key_layer, value_layer, layer_past, attention_mask, self.scale_mask_softmax
                 )
 
                 mem_query, key_layer2, value_layer2 = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
@@ -626,7 +632,8 @@ class ParallelSelfAttention(nn.Module):
                     torch.cat((mem_keys, key_layer2)),
                     torch.cat((mem_vals, value_layer2)),
                     None,
-                    torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)), dim=3)
+                    torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)), dim=3),
+                    self.mem_scale_mask_softmax,
                 )
         else:
             context_layer = self.sparse_attention(
