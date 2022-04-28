@@ -603,14 +603,14 @@ class ParallelSelfAttention(nn.Module):
             else:
                 assert self.attention_type == "knn_both"
 
-                # TODO: optionally, use cosine distance
-                should_normalize=False
+                # use cosine distance
+                use_cosine_sim=True
 
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
 
-                mem_query, _, _ = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=should_normalize)
+                mem_query, _, _ = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
 
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem_train.get_memories(
@@ -618,7 +618,7 @@ class ParallelSelfAttention(nn.Module):
                     self.training,
                     mem_query,
                     eod_markers,
-                    lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=should_normalize)
+                    lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
                 )
 
                 mem_context_layer = self.attention(
@@ -659,8 +659,7 @@ class ParallelSelfAttention(nn.Module):
         # Output. [sq, b, h]
         # =================
 
-        output, bias = self.dense(context_layer)
-
+        output, bias = dense(context_layer)
         return output, bias
 
 
