@@ -629,10 +629,10 @@ class ParallelSelfAttention(nn.Module):
 
                 mem_context_layer = self.attention(
                     mem_query,
-                    torch.cat((mem_keys, key_layer2)),
-                    torch.cat((mem_vals, value_layer2)),
+                    torch.cat((mem_keys, key_layer2[:1,:,:,:])),
+                    torch.cat((mem_vals, value_layer2[:1,:,:,:])),
                     None,
-                    torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)), dim=3),
+                    torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)[:,:,:,:1]), dim=3),
                     self.mem_scale_mask_softmax,
                 )
         else:
