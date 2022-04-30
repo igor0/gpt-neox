@@ -604,7 +604,7 @@ class ParallelSelfAttention(nn.Module):
                 assert self.attention_type == "knn_both"
 
                 # use cosine distance
-                use_cosine_sim=True
+                use_cosine_sim=False
 
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
