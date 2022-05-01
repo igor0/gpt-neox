@@ -506,8 +506,9 @@ class ParallelSelfAttention(nn.Module):
             mixed_x_layer, 3
         )
         if normalize:
-            query_layer = l2norm(query_layer)
+            #query_layer = l2norm(query_layer)
             key_layer = l2norm(key_layer)
+            value_layer = l2norm(key_layer)
         return query_layer, key_layer, value_layer
 
     def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
@@ -604,13 +605,13 @@ class ParallelSelfAttention(nn.Module):
                 assert self.attention_type == "knn_both"
 
                 # use cosine distance
-                use_cosine_sim=False
+                should_normalize=True
 
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
 
-                mem_query, key_layer2, value_layer2 = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
+                mem_query, key_layer2, value_layer2 = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=should_normalize)
 
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem_train.get_memories(
@@ -618,7 +619,7 @@ class ParallelSelfAttention(nn.Module):
                     self.training,
                     mem_query,
                     eod_markers,
-                    lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
+                    lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=should_normalize)
                 )
 
                 mem_context_layer = self.attention(
