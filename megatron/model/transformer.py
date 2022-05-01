@@ -506,9 +506,9 @@ class ParallelSelfAttention(nn.Module):
             mixed_x_layer, 3
         )
         if normalize:
-            #query_layer = l2norm(query_layer)
+            query_layer = l2norm(query_layer)
             key_layer = l2norm(key_layer)
-            value_layer = l2norm(key_layer)
+            #value_layer = l2norm(key_layer)
         return query_layer, key_layer, value_layer
 
     def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
