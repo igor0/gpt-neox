@@ -365,13 +365,11 @@ class ParallelSelfAttention(nn.Module):
                     memory_dumper_init = memory_dumper_init)
                 self.memory_snap = None
 
-            if neox_args.memory_attn_mode == "sigmoid":
-                self.combine_attn_output_gate = nn.Parameter(0.002 * torch.ones(neox_args.num_attention_heads, 1, 1))
 
-            if "memory_key_bias_48" in neox_args.memory_flags:
-                self.memory_key_bias = torch.nn.Parameter(torch.rand(neox_args.num_attention_heads, self.hidden_size_per_attention_head, dtype=torch.float16).cuda()/48)
-            else:
-                self.memory_key_bias = None
+            # sigmoid function
+            attention_gate_init = 2
+            self.attention_gate_factor = 1
+            self.attention_gate = nn.Parameter((attention_gate_init / self.attention_gate_factor) * torch.ones(neox_args.num_attention_heads, 1, 1))
 
             # [b, np, sq, sk]
             penalty_value = -10
@@ -621,13 +619,23 @@ class ParallelSelfAttention(nn.Module):
                     lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
                 )
 
-                mem_context_layer = self.attention(
+                mem_context_layer_distant = self.attention(
                     mem_query,
-                    torch.cat((mem_keys, key_layer2)),
-                    torch.cat((mem_vals, value_layer2)),
+                    mem_keys,
+                    mem_vals,
                     None,
-                    torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)), dim=3)
+                    mem_mask,
                 )
+                mem_context_layer_local = self.attention(
+                    mem_query,
+                    key_layer2,
+                    value_layer2,
+                    None,
+                    attention_mask,
+                )
+
+                gate = (self.attention_gate * self.attention_gate_factor).sigmoid()
+                mem_context_layer = mem_context_layer_local * gate + mem_context_layer_distant * (1 - gate)
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask
@@ -642,6 +650,7 @@ class ParallelSelfAttention(nn.Module):
 
         if mem_context_layer is not None:
             mem_output, mem_bias = self.densify(mem_context_layer, self.dense_mem)
+
             output = output + mem_output
             bias = bias + mem_bias
 
