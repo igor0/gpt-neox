@@ -623,10 +623,10 @@ class ParallelSelfAttention(nn.Module):
 
                 mem_context_layer = self.attention(
                     mem_query,
-                    torch.cat((mem_keys, key_layer2)),
-                    torch.cat((mem_vals, value_layer2)),
+                    key_layer2, #torch.cat((mem_keys, key_layer2)),
+                    value_layer2, #torch.cat((mem_vals, value_layer2)),
                     None,
-                    torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)), dim=3)
+                    attention_mask.expand(mem_mask.shape[0], -1, -1, -1) #torch.cat((mem_mask, attention_mask.expand(mem_mask.shape[0], -1, -1, -1)), dim=3)
                 )
         else:
             context_layer = self.sparse_attention(
