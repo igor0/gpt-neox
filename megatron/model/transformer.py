@@ -240,10 +240,6 @@ class ParallelSelfAttention(nn.Module):
             coeff = max(1, self.layer_number)
             self.norm_factor *= coeff
 
-        self.mem_coeff = nn.Parameter(
-            torch.ones(self.num_attention_heads_per_partition, 1, 1) * math.log(20)
-        )
-
         self.rpe = rpe
 
         if self.pos_emb == "alibi":
@@ -309,6 +305,10 @@ class ParallelSelfAttention(nn.Module):
             self.attention_dropout = nn.Dropout(neox_args.attention_dropout)
 
         if self.is_knn():
+            mem_coeff = nn.Parameter(
+                torch.ones(self.num_attention_heads_per_partition, 1, 1) * math.log(20)
+            )
+
             self.mem_scale_mask_softmax = FusedScaleMaskSoftmax(
                 input_in_fp16=self.fp16,
                 input_in_bf16=self.bf16,
@@ -316,9 +316,8 @@ class ParallelSelfAttention(nn.Module):
                 general_mask_fusion=neox_args.scaled_masked_softmax_fusion,
                 mask_func=self.attention_mask_func,
                 softmax_in_fp32=True,
-                scale=self.mem_coeff,
+                scale=mem_coeff,
             )
-            print("XXX", "USING COEFF FOR MEM SOFTMAX:", self.mem_coeff)
 
         # Output.
         self.dense = mpu.RowParallelLinear(
@@ -331,17 +330,17 @@ class ParallelSelfAttention(nn.Module):
             parallel_output=parallel_output,
         )
 
-        self.dense_mem = mpu.RowParallelLinear(
-            neox_args=neox_args,
-            input_size=neox_args.hidden_size,
-            output_size=neox_args.hidden_size,
-            input_is_parallel=True,
-            init_method=output_layer_init_method,
-            skip_bias_add=True,
-            parallel_output=parallel_output,
-        )
-
         if self.is_knn():
+            self.dense_mem = mpu.RowParallelLinear(
+                neox_args=neox_args,
+                input_size=neox_args.hidden_size,
+                output_size=neox_args.hidden_size,
+                input_is_parallel=True,
+                init_method=output_layer_init_method,
+                skip_bias_add=True,
+                parallel_output=parallel_output,
+            )
+
             self.memory_kq_normalize = neox_args.memory_kq_normalize
             self.memory_attn_mode = neox_args.memory_attn_mode
 
