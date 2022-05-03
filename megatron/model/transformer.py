@@ -368,7 +368,7 @@ class ParallelSelfAttention(nn.Module):
 
             # sigmoid function
             attention_gate_init = 2
-            self.attention_gate_factor = 1
+            self.attention_gate_factor = 100
             self.attention_gate = nn.Parameter((attention_gate_init / self.attention_gate_factor) * torch.ones(neox_args.num_attention_heads, 1, 1))
 
             # [b, np, sq, sk]
