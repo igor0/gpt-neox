@@ -619,23 +619,13 @@ class ParallelSelfAttention(nn.Module):
                     lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
                 )
 
-                mem_context_layer_distant = self.attention(
+                mem_context_layer = self.attention(
                     mem_query,
-                    mem_keys.clone().detach(),
-                    mem_vals.clone().detach(),
+                    mem_keys,
+                    mem_vals,
                     None,
                     mem_mask,
                 )
-                mem_context_layer_local = self.attention(
-                    mem_query.clone().detach(),
-                    key_layer2,
-                    value_layer2,
-                    None,
-                    attention_mask,
-                )
-
-                gate = (self.attention_gate * self.attention_gate_factor).sigmoid()
-                mem_context_layer = mem_context_layer_local * gate + mem_context_layer_distant * (1 - gate)
         else:
             context_layer = self.sparse_attention(
                 query_layer, key_layer, value_layer, attention_mask
