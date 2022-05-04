@@ -504,7 +504,7 @@ class ParallelSelfAttention(nn.Module):
             mixed_x_layer, 3
         )
         if normalize:
-            query_layer = l2norm(query_layer)
+            #query_layer = l2norm(query_layer)
             key_layer = l2norm(key_layer)
         return query_layer, key_layer, value_layer
 
@@ -602,7 +602,7 @@ class ParallelSelfAttention(nn.Module):
                 assert self.attention_type == "knn_both"
 
                 # use cosine distance
-                use_cosine_sim=False
+                use_cosine_sim=True
 
                 context_layer = self.attention(
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
