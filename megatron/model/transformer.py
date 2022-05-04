@@ -367,8 +367,8 @@ class ParallelSelfAttention(nn.Module):
 
 
             # sigmoid function
-            attention_gate_init = 0
-            self.attention_gate_factor = 100
+            attention_gate_init = -1
+            self.attention_gate_factor = 1000
             self.attention_gate = nn.Parameter((attention_gate_init / self.attention_gate_factor) * torch.ones(neox_args.num_attention_heads, 1, 1))
 
             # [b, np, sq, sk]
@@ -621,13 +621,13 @@ class ParallelSelfAttention(nn.Module):
 
                 mem_context_layer_distant = self.attention(
                     mem_query,
-                    mem_keys,
-                    mem_vals,
+                    mem_keys.clone().detach(),
+                    mem_vals.clone().detach(),
                     None,
                     mem_mask,
                 )
                 mem_context_layer_local = self.attention(
-                    mem_query,
+                    mem_query.clone().detach(),
                     key_layer2,
                     value_layer2,
                     None,
