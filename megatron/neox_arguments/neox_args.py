@@ -441,6 +441,9 @@ class NeoXArgsLogging(NeoXArgsTemplate):
     wandb_host: str = "https://api.wandb.ai"
     """url of the wandb host"""
 
+    wandb_name: str = None
+    """wandb run name"""
+
     git_hash: str = get_git_commit_hash()
     """current git hash of repository"""
 
