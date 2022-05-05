@@ -352,6 +352,9 @@ class ParallelSelfAttention(nn.Module):
             else:
                 memory_dumper_init = None
 
+            # [kv, sq, b, np, hn]
+            self.null_kv = nn.Parameter(torch.rand(2, 1, 1, self.num_attention_heads_per_partition, self.hidden_size_per_attention_head))
+
             if self.memorize_mode == "load":
                 # Load precomputed memories from the specified index
                 self.memory_snap = load_memory_snapshot(neox_args.memory_load, layer_number)
@@ -362,6 +365,7 @@ class ParallelSelfAttention(nn.Module):
                     device,
                     neox_args.memory_size,
                     neox_args.memory_invalid_query_mode,
+                    null_kv = self.null_kv,
                     memory_dumper_init = memory_dumper_init)
                 self.memory_snap = None
 

@@ -5,7 +5,7 @@ class MemoryLive:
     Represents a sliding window of memories tracked for a particular model.
     """
 
-    def __init__(self, device, memory_size, memory_invalid_query_mode, memory_dumper_init=None):
+    def __init__(self, device, memory_size, memory_invalid_query_mode, null_kv, memory_dumper_init=None):
         """
         memory_size:
             Number of key/value pairs (per batch & attention head) to retain
@@ -35,11 +35,13 @@ class MemoryLive:
         self.partition = _MemoryPartition(
             memory_size,
             memory_invalid_query_mode,
+            null_kv,
             memory_dumper_init(self.training),
         )
         self.inactive_partition = _MemoryPartition(
             memory_size,
             memory_invalid_query_mode,
+            null_kv,
             memory_dumper_init(not self.training),
         )
 
@@ -69,10 +71,11 @@ class _MemoryPartition:
     for training and one for evaluation.
     """
 
-    def __init__(self, memory_size, memory_invalid_query_mode, memory_dumper=None):
+    def __init__(self, memory_size, memory_invalid_query_mode, null_kv, memory_dumper=None):
         self.memory_size = memory_size
         self.memory_invalid_query_mode = memory_invalid_query_mode
         self.memory_dumper = memory_dumper
+        self.null_kv = null_kv
         self._clear()
 
     def _move_to(self, device):
@@ -141,25 +144,18 @@ class _MemoryPartition:
         #    - memorized keys from before EOS
         #    - queries from after EOS
 
-        _, keys, values = qkv_func(self.context)
+        #_, keys, values = qkv_func(self.context)
+
+        # keys/values: [sq, b, np, hn]
+        sz_batch = self.context.shape[1]
+        keys = self.null_kv[0].expand(-1, sz_batch, -1, -1).contiguous()
+        values = self.null_kv[1].expand(-1, sz_batch, -1, -1).contiguous()
 
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(
             size=(keys.shape[1], 1, queries.shape[0], keys.shape[0]),
-            fill_value=True,
+            fill_value=False,
             device=device)
-
-        for batch in range(memory_mask.shape[0]):
-            keys_valid_from = self.valid_from[batch]
-            queries_valid_to = eod_markers[batch][0]
-            memory_mask[batch,:,:queries_valid_to,keys_valid_from:] = False
-
-            if self.memory_invalid_query_mode == "first_token":
-                memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
-            elif self.memory_invalid_query_mode == "all_tokens":
-                memory_mask[batch,:,queries_valid_to:,:] = False
-            else:
-                raise BaseException("Invalid memory_invalid_query_mode value", self.memory_invalid_query_mode)
 
         return keys, values, memory_mask
 
