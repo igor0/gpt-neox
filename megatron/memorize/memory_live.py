@@ -93,6 +93,8 @@ class _MemoryPartition:
             context: [sq, b, h]
             eod_markers
         """
+        # only take the useless first position - meant to be easy to ignore
+        context = context[:1,:,:]
 
         # adjust the offset to apply to the positional embedding
 
@@ -146,20 +148,20 @@ class _MemoryPartition:
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(
             size=(keys.shape[1], 1, queries.shape[0], keys.shape[0]),
-            fill_value=True,
+            fill_value=False,
             device=device)
 
-        for batch in range(memory_mask.shape[0]):
-            keys_valid_from = self.valid_from[batch]
-            queries_valid_to = eod_markers[batch][0]
-            memory_mask[batch,:,:queries_valid_to,keys_valid_from:] = False
+        #for batch in range(memory_mask.shape[0]):
+            #keys_valid_from = self.valid_from[batch]
+            #queries_valid_to = eod_markers[batch][0]
+            #memory_mask[batch,:,:queries_valid_to,keys_valid_from:] = False
 
-            if self.memory_invalid_query_mode == "first_token":
-                memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
-            elif self.memory_invalid_query_mode == "all_tokens":
-                memory_mask[batch,:,queries_valid_to:,:] = False
-            else:
-                raise BaseException("Invalid memory_invalid_query_mode value", self.memory_invalid_query_mode)
+            #if self.memory_invalid_query_mode == "first_token":
+                #memory_mask[batch,:,queries_valid_to:,self.first_token[batch]] = False
+            #elif self.memory_invalid_query_mode == "all_tokens":
+                #memory_mask[batch,:,queries_valid_to:,:] = False
+            #else:
+                #raise BaseException("Invalid memory_invalid_query_mode value", self.memory_invalid_query_mode)
 
         return keys, values, memory_mask
 
