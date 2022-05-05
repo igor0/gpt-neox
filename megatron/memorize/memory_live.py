@@ -94,7 +94,9 @@ class _MemoryPartition:
             eod_markers
         """
         # only take the useless first position - meant to be easy to ignore
-        context = context[:1,:,:]
+        take = min(context.shape[0], 256)
+        if take < context.shape[0]:
+            context = context[:take,:,:]
 
         # adjust the offset to apply to the positional embedding
 
@@ -110,7 +112,8 @@ class _MemoryPartition:
 
         # record the memories
 
-        if self.context is None:
+        # DEBUG: just replace the memory
+        if True or self.context is None:
             self.context = context
             self.valid_from = [0] * len(eod_markers)
             self.first_token = [0] * len(eod_markers)
