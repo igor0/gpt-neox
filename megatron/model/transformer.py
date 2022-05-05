@@ -508,7 +508,7 @@ class ParallelSelfAttention(nn.Module):
             key_layer = l2norm(key_layer)
         return query_layer, key_layer, value_layer
 
-    def forward(self, hidden_states, attention_mask, eod_markers, layer_past=None):
+    def forward(self, layer_norm, hidden_states, attention_mask, eod_markers, layer_past=None):
         # hidden_states: [sq, b, h]
         # layer_past: [kv, sk, b, np, hn]
 
@@ -516,18 +516,27 @@ class ParallelSelfAttention(nn.Module):
         # Query, Key, and Value
         # =====================
 
-        # [sq, b, h] --> 3 [sq, b, np, hn]
-        (query_layer, key_layer, value_layer) = self.hidden_to_qkv(hidden_states, self.query_key_value)
-
         if self.is_knn() and self.memorize_mode == "train":
             mem_train = self.memory_train.get_partition(self.training)
 
             if self.attention_type != "knn_both":
                 raise ValueError("Not supported.")
 
-            hidden_states_to_mem = hidden_states.clone().detach()
+            # memorize the pre-layernorm hidden states
+            hidden_states_add_mem = hidden_states.clone().detach()
+
         else:
             mem_train = None
+
+        if mem_train is not None and not mem_train.is_empty():
+            num_mem = mem_train.context.shape[0]
+            all_states = layer_norm(torch.cat((mem_train.context, hidden_states), dim=0))
+
+            mem_train.normalized_context = all_states[:num_mem, :, :]
+            hidden_states_for_mem = all_states[num_mem:, :, :]
+
+        # [sq, b, h] --> 3 [sq, b, np, hn]
+        (query_layer, key_layer, value_layer) = self.hidden_to_qkv(layer_norm(hidden_states), self.query_key_value)
 
         if exists(self.rotary_emb):
             if exists(self.rotary_ndims):
@@ -608,7 +617,7 @@ class ParallelSelfAttention(nn.Module):
                     query_layer, key_layer, value_layer, layer_past, attention_mask,
                 )
 
-                mem_query, key_layer2, value_layer2 = self.hidden_to_qkv(hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
+                mem_query, _, _ = self.hidden_to_qkv(hidden_states_for_mem, self.query_key_value_mem, normalize=use_cosine_sim)
 
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem_train.get_memories(
@@ -634,7 +643,7 @@ class ParallelSelfAttention(nn.Module):
 
         # Store the memories
         if self.is_knn():
-            mem_train.add_memories(hidden_states_to_mem, eod_markers)
+            mem_train.add_memories(hidden_states_add_mem, eod_markers)
 
         output, bias = self.densify(context_layer, self.dense)
 
@@ -759,7 +768,7 @@ class ParallelTransformerLayer(nn.Module):
             # attention_output = attn(ln1(x))
             residual = x
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
+                self.input_layernorm, x, attention_mask, eod_markers, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
@@ -793,7 +802,7 @@ class ParallelTransformerLayer(nn.Module):
 
             # x = x + attn(ln1(x))
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
+                self.input_layernorm, x, attention_mask, eod_markers, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output

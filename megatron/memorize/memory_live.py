@@ -146,7 +146,7 @@ class _MemoryPartition:
         #    - memorized keys from before EOS
         #    - queries from after EOS
 
-        _, keys, values = qkv_func(self.context)
+        _, keys, values = qkv_func(self.normalized_context)
 
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(
