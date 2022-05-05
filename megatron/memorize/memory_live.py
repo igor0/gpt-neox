@@ -144,12 +144,15 @@ class _MemoryPartition:
         #    - memorized keys from before EOS
         #    - queries from after EOS
 
-        #_, keys, values = qkv_func(self.context)
+        _, keys, values = qkv_func(self.context)
 
         # keys/values: [sq, b, np, hn]
         sz_batch = self.context.shape[1]
-        keys = self.null_kv[0].expand(-1, sz_batch, -1, -1).contiguous()
-        values = self.null_kv[1].expand(-1, sz_batch, -1, -1).contiguous()
+        null_keys = self.null_kv[0].expand(-1, sz_batch, -1, -1)
+        null_values = self.null_kv[1].expand(-1, sz_batch, -1, -1)
+
+        keys = torch.cat((null_keys, keys), dim=0).contiguous()
+        values = torch.cat((null_values, values), dim=0).contiguous()
 
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(
