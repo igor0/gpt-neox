@@ -145,7 +145,9 @@ def init_wandb(neox_args):
     neox_args.update_value("use_wandb", use_wandb)
     if neox_args.use_wandb:
         group_name = neox_args.wandb_group
-        name = f"{socket.gethostname()}-{local_rank()}" if group_name else None
+        name = neox_args.wandb_name
+        if name is None:
+            name = f"{socket.gethostname()}-{local_rank()}" if group_name else None
         try:
             wandb.init(
                 project=neox_args.wandb_project,
@@ -338,7 +340,8 @@ class OverflowMonitor:
     def check(self, skipped):
         self.history.append(skipped)
         if (
-            self.optimizer.overflow
+            hasattr(self.optimizer, "overflow")
+            and self.optimizer.overflow
             and len(self.history) == self.n
             and all(self.history)
         ):

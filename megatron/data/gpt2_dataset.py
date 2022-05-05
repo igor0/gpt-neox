@@ -29,7 +29,7 @@ from megatron import mpu, print_rank_0
 class GPT2Dataset(torch.utils.data.Dataset):
 
     def __init__(self, name, data_prefix, documents, indexed_dataset,
-                 num_samples, seq_length, seed, build_index_mappings=True):
+                 num_samples, seq_length, seed, build_index_mappings=True, shuffle=True):
 
         self.name = name
         self.indexed_dataset = indexed_dataset
@@ -48,6 +48,9 @@ class GPT2Dataset(torch.utils.data.Dataset):
 
             if self.shuffle_idx_len != self.sample_idx_len:
                 print(f'WARNING: shuffle index length ({self.shuffle_idx_len}) is not equal to sample index length ({self.sample_idx_len})')
+
+        if not shuffle:
+            self.shuffle_idx = np.arange(len(self.shuffle_idx))
 
     def __len__(self):
         return min(self.shuffle_idx_len, self.sample_idx_len)

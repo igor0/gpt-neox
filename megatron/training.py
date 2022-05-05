@@ -24,7 +24,9 @@ from datetime import datetime
 from functools import partial
 
 import math
+import re
 import sys
+import wandb
 
 import torch
 import deepspeed
@@ -92,7 +94,7 @@ def pretrain(neox_args):
     timers("train/valid/test data iterators").start()
     (
         train_data_iterator,
-        valid_data_iterator,
+        valid_data_loader,
         test_data_iterator,
     ) = build_train_valid_test_data_iterators(neox_args=neox_args)
     timers("train/valid/test data iterators").stop()
@@ -101,6 +103,9 @@ def pretrain(neox_args):
     print_rank_0("done with setups ...")
     timers.log(["model and optimizer", "train/valid/test data iterators"])
     print_rank_0("training ...")
+
+    # log gradient updates to wandb
+    wandb.watch(model, log_freq=100)
 
     iteration = 0
     if neox_args.do_train and neox_args.train_iters > 0:
@@ -111,7 +116,7 @@ def pretrain(neox_args):
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
             train_data_iterator=train_data_iterator,
-            valid_data_iterator=valid_data_iterator,
+            valid_data_loader=valid_data_loader,
         )
 
     if neox_args.do_valid:
@@ -120,7 +125,7 @@ def pretrain(neox_args):
             neox_args=neox_args,
             prefix=prefix,
             forward_step_func=forward_step,
-            data_iterator=valid_data_iterator,
+            data_iterator=iter(valid_data_loader),
             model=model,
             iteration=iteration,
             verbose=False,
@@ -259,6 +264,13 @@ def get_model(neox_args, inference=False, get_key_value=True):
         for name, param in model.named_parameters():
             if not "soft_embedding" in name:
                 param.requires_grad = False
+
+    if neox_args.train_only is not None:
+        print('Parameters:')
+        param_regex = re.compile(neox_args.train_only)
+        for name, param in model.named_parameters():
+            param.requires_grad = (param_regex.search(name) is not None)
+            print(f'    {name} requires_grad={param.requires_grad}')
 
     if not neox_args.is_pipe_parallel:
         # Export PipeParallel model to nn.Sequential model to avoid the overhead of deepspeed's pipe parallel training
@@ -552,7 +564,7 @@ def train(
     optimizer,
     lr_scheduler,
     train_data_iterator,
-    valid_data_iterator,
+    valid_data_loader,
 ):
     """Train the model function."""
 
@@ -570,6 +582,18 @@ def train(
 
     # get noise scale logger (if neox_args.log_gradient_noise_scale is True)
     noise_scale_logger = get_noise_scale_logger(neox_args)
+
+    # Initial eval
+    evaluate_and_print_results(
+        neox_args=neox_args,
+        prefix="initial eval",
+        forward_step_func=forward_step,
+        data_iterator=iter(valid_data_loader),
+        model=model,
+        iteration=iteration,
+        verbose=False,
+        timers=timers,
+    )
 
     # to monitor if we've skipped many iterations in a row and trigger an early exit
     overflow_monitor = OverflowMonitor(optimizer)
@@ -636,7 +660,7 @@ def train(
                 neox_args=neox_args,
                 prefix=prefix,
                 forward_step_func=forward_step,
-                data_iterator=valid_data_iterator,
+                data_iterator=iter(valid_data_loader),
                 model=model,
                 iteration=iteration,
                 verbose=False,
@@ -700,6 +724,7 @@ def evaluate(
                     timers=timers,
                 )
                 losses.append(loss)
+                print("LOSS", loss)
 
             # When contiguous memory optimizations are enabled, the buffers
             # allocated by the optimizations are deallocated during backward pass

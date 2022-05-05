@@ -1,6 +1,7 @@
 import torch
 import math
 from torch.nn.parameter import Parameter
+from torch import nn
 
 from megatron import mpu
 from megatron.model.positional_embeddings import SinusoidalPositionalEmbedding
@@ -82,6 +83,13 @@ class Embedding(torch.nn.Module):
         # Embeddings dropout
         self.embedding_dropout = torch.nn.Dropout(embedding_dropout_prob)
 
+        # Dummy parameter to enable training with parts of the model are frozen. Setting
+        # requires_grad==True on the residual path (e.g., attentions or MLPs) won't take an
+        # effect unless word_embedding has requires_grad==True. The dummy parameter achieves
+        # the same goal, while enabling the word embedding transform to stay frozen.
+        #
+        # TODO: better understand why this is needed.
+        self.dummy = nn.Parameter(torch.ones(1))
     def add_tokentype_embeddings(self, num_tokentypes):
         """Add token-type embedding. This function is provided so we can add
         token-type embeddings in case the pretrained model does not have it.
@@ -114,7 +122,7 @@ class Embedding(torch.nn.Module):
 
         # Dropout.
         embeddings = self.embedding_dropout(embeddings)
-        return embeddings
+        return embeddings * self.dummy
 
 
 class EmbeddingPipe(Embedding):

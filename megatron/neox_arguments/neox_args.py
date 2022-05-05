@@ -20,6 +20,7 @@ ATTENTION_TYPE_CHOICES = [
     "bslongformer",
     "gmlp",
     "amlp",
+    "cheat",
 ]
 
 
@@ -437,6 +438,9 @@ class NeoXArgsLogging(NeoXArgsTemplate):
 
     wandb_host: str = "https://api.wandb.ai"
     """url of the wandb host"""
+
+    wandb_name: str = None
+    """wandb run name"""
 
     git_hash: str = get_git_commit_hash()
     """current git hash of repository"""
@@ -899,6 +903,16 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     Whether to calculate character level perplexity as well as token level perplexity. (may incur a time cost)
     """
 
+    mem_friendly_batch: bool = False
+    """
+    Use memory-friendly batching, intended for training of memorizing transformers
+    (https://arxiv.org/pdf/2203.08913.pdf)
+    """
+
+    train_only: str = None
+    """
+    Only parameters whose names match the provided regular expression will be trained; all other parameters will be frozen.
+    """
 
 @dataclass
 class NeoXArgsTextgen(NeoXArgsTemplate):

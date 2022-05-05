@@ -11,6 +11,19 @@ from megatron.data.blendable_dataset import BlendableDataset
 from megatron.data.gpt2_dataset import GPT2Dataset
 from megatron.data.samplers import DistributedBatchSampler
 
+class MemorizationFriendlyDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset, batch_size):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.len = (len(self.dataset) // batch_size) * batch_size
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, idx):
+        batch = (idx % self.batch_size)
+        remapped_idx =  batch * (len(self) // self.batch_size) + (idx // self.batch_size)
+        return self.dataset.__getitem__(remapped_idx)
 
 def make_data_loader(dataset, neox_args):
     """Buld dataloader given an input dataset."""
@@ -21,6 +34,9 @@ def make_data_loader(dataset, neox_args):
     rank = mpu.get_data_parallel_rank()
     global_batch_size = neox_args.batch_size * world_size
     num_workers = neox_args.num_workers
+
+    if neox_args.mem_friendly_batch:
+        dataset = MemorizationFriendlyDataset(dataset, global_batch_size)
 
     # Use a simple sampler with distributed batch sampler.
     sampler = torch.utils.data.SequentialSampler(dataset)
@@ -61,7 +77,8 @@ def build_the_dataset(data_prefix, name, data_impl,
 
 def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     train_valid_test_num_samples,
-                                    seq_length, seed, skip_warmup):
+                                    seq_length, seed, skip_warmup,
+                                    shuffle):
     """Build train, valid, and test datasets."""
 
     # Indexed dataset.
@@ -94,7 +111,8 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
             dataset = GPT2Dataset(name, data_prefix,
                                   documents, indexed_dataset,
                                   train_valid_test_num_samples[index],
-                                  seq_length, seed)
+                                  seq_length, seed, build_index_mappings=True,
+                                  shuffle=shuffle)
         return dataset
 
     train_dataset = build_dataset(0, 'train')
@@ -291,7 +309,8 @@ def build_train_valid_test_data_iterators(neox_args):
                 train_valid_test_num_samples=train_val_test_num_samples,
                 seq_length=neox_args.seq_length,
                 seed=neox_args.seed,
-                skip_warmup=(not neox_args.mmap_warmup)
+                skip_warmup=(not neox_args.mmap_warmup),
+                shuffle=(not neox_args.mem_friendly_batch),
             )
 
         # Build dataloders.
@@ -331,6 +350,7 @@ def build_train_valid_test_data_iterators(neox_args):
     if valid_dataloader is not None:
         start_iter_val = ((neox_args.iteration * neox_args.gradient_accumulation_steps) // neox_args.eval_interval) * \
                          neox_args.eval_iters
+        start_iter_val = 0
         valid_dataloader.batch_sampler.start_iter = start_iter_val % \
                                                     len(valid_dataloader)
         print_rank_0('setting validation data start iteration to {}'.
@@ -342,17 +362,12 @@ def build_train_valid_test_data_iterators(neox_args):
     else:
         train_data_iterator = None
 
-    if valid_dataloader is not None:
-        valid_data_iterator = iter(valid_dataloader)
-    else:
-        valid_data_iterator = None
-
     if test_dataloader is not None:
         test_data_iterator = iter(test_dataloader)
     else:
         test_data_iterator = None
 
-    return train_data_iterator, valid_data_iterator, test_data_iterator 
+    return train_data_iterator, valid_dataloader, test_data_iterator
 
 
 def compile_helper():

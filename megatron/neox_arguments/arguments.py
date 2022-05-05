@@ -258,6 +258,13 @@ class NeoXArgs(*BASE_CLASSES):
             help="Team name for Weights and Biases.",
         )
 
+        group.add_argument(
+            "--wandb_name",
+            type=str,
+            default=None,
+            help='Weights and Biases run name.',
+        )
+
         group = parser.add_argument_group(title="Eval args")
 
         group.add_argument(
