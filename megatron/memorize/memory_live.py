@@ -83,6 +83,7 @@ class _MemoryPartition:
         self.context = None
         self.first_token = None
         self.pos_offset = 0
+        self.zeros = None
 
     def _sync(self):
         if self.memory_dumper is not None:
@@ -94,7 +95,16 @@ class _MemoryPartition:
             eod_markers
         """
         # only take the useless first position - meant to be easy to ignore
-        context = context[:1,:,:]
+        zeros = context[:1,:,:]
+        if self.zeros is None:
+            self.zeros = zeros
+        else:
+            self.zeros = torch.cat((self.zeros, zeros), dim=0)
+
+        max_zeros = self.memory_size // 8
+        if self.zeros.shape[0] > max_zeros:
+            removed_zeros = self.zeros.shape[0] - max_zeros
+            self.zeros = self.zeros[removed_zeros:]
 
         # adjust the offset to apply to the positional embedding
 
@@ -143,7 +153,8 @@ class _MemoryPartition:
         #    - memorized keys from before EOS
         #    - queries from after EOS
 
-        _, keys, values = qkv_func(self.context)
+        context = torch.cat((self.zeros, self.context), dim=0)
+        _, keys, values = qkv_func(context)
 
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(
