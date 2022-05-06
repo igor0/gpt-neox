@@ -457,13 +457,13 @@ class ParallelSelfAttention(nn.Module):
             past_states = partition.past_states
 
             # Save the pre-ln hidden state
-            partition.past_states = hidden_states.clone().detach()[:16]
+            partition.past_states = hidden_states.clone().detach()
         else:
             past_states = None
 
         if past_states is not None:
             # Concatenate the past hidden states with the current hidden states
-            hidden_states = layer_norm(torch.cat((past_states, hidden_states), dim=0))
+            hidden_states = torch.cat((past_states, hidden_states), dim=0)
 
             # Update the attention mask
             attention_mask = get_attn_mask(hidden_states.size(0), hidden_states.device)
