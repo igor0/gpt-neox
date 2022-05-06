@@ -40,6 +40,7 @@ from megatron.model.fused_bias_dropout import (
     bias_dropout_add_fused_inference,
 )
 from megatron.model.utils import configure_sparse_attention
+from megatron.utils import get_attn_mask
 
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
@@ -174,6 +175,20 @@ class ParallelLinear(nn.Module):
     def forward(self, hidden_states):
         return self.final_linear(hidden_states)
 
+class Partition:
+    def __init__(self):
+        self.past_states = None
+
+class Partitions:
+    def __init__(self):
+        self.eval_partition = Partition()
+        self.train_partition = Partition()
+
+    def get_partition(self, training):
+        if training:
+            return self.train_partition
+        else:
+            return self.eval_partition
 
 class ParallelSelfAttention(nn.Module):
     """Parallel self-attention layer abstract class.
@@ -261,7 +276,7 @@ class ParallelSelfAttention(nn.Module):
             self.rotary_emb = None
 
         self.attention_type = neox_args.attention_config[layer_number]
-        self.sparse = self.attention_type != "global"
+        self.sparse = self.attention_type not in ["global", "cheat"]
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -295,6 +310,11 @@ class ParallelSelfAttention(nn.Module):
             skip_bias_add=True,
             parallel_output=parallel_output,
         )
+
+        if self.attention_type == "cheat":
+            self.partitions = Partitions()
+        else:
+            self.partitions = None
 
     def attention(
         self, query_layer, key_layer, value_layer, layer_past, attention_mask
@@ -422,7 +442,7 @@ class ParallelSelfAttention(nn.Module):
             query_layer, key_layer, value_layer, attn_mask=attn_mask, rpe=rpe
         )
 
-    def forward(self, hidden_states, attention_mask, layer_past=None):
+    def forward(self, layer_norm, hidden_states, attention_mask, layer_past=None):
 
         # hidden_states: [sq, b, h]
 
@@ -430,8 +450,26 @@ class ParallelSelfAttention(nn.Module):
         # Query, Key, and Value
         # =====================
 
+        if self.partitions is not None:
+            partition = self.partitions.get_partition(self.training)
+
+            # Get the past pre-ln hidden state
+            past_states = partition.past_states
+
+            # Save the pre-ln hidden state
+            partition.past_states = hidden_states.clone().detach()[:16]
+        else:
+            past_states = None
+
+        if past_states is not None:
+            # Concatenate the past hidden states with the current hidden states
+            hidden_states = layer_norm(torch.cat((past_states, hidden_states), dim=0))
+
+            # Update the attention mask
+            attention_mask = get_attn_mask(hidden_states.size(0), hidden_states.device)
+
         # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
-        mixed_x_layer, _ = self.query_key_value(hidden_states)
+        mixed_x_layer, _ = self.query_key_value(layer_norm(hidden_states))
 
         # [sq, b, (np * 3 * hn)] --> [sq, b, np, 3 * hn]
         new_tensor_shape = mixed_x_layer.size()[:-1] + (
@@ -508,6 +546,9 @@ class ParallelSelfAttention(nn.Module):
             self.hidden_size_per_partition,
         )
         context_layer = context_layer.view(*new_context_layer_shape)
+
+        if past_states is not None:
+            context_layer = context_layer[past_states.size(0):, :, :]
 
         # =================
         # Output. [sq, b, h]
@@ -603,7 +644,7 @@ class ParallelTransformerLayer(nn.Module):
             # attention_output = attn(ln1(x))
             residual = x
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, layer_past=layer_past
+                self.input_layernorm, x, attention_mask, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
@@ -637,7 +678,7 @@ class ParallelTransformerLayer(nn.Module):
 
             # x = x + attn(ln1(x))
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, layer_past=layer_past
+                self.input_layernorm, x, attention_mask, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
