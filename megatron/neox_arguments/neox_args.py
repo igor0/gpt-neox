@@ -978,4 +978,44 @@ class NeoXArgsTextgen(NeoXArgsTemplate):
     Tasks to evaluate on using lm_eval_harness
     """
 
-    
+@dataclass
+class NeoXArgsMemory(NeoXArgsTemplate):
+    memory_size: int = 4096
+    """
+    Size of memory at training time, in tokens.
+    """
+
+    memory_invalid_query_mode = "first_token"
+    """
+    How to populate the attention mask for tokens that follow an EOD token.
+
+    Possible values: "first_token", "all_tokens"
+    """
+
+    memory_save: str = None
+    """
+    Location to store memories.
+    """
+
+    memory_load: str = None
+    """
+    Location from where to load previously stored memories.
+    """
+
+    memorize_input_file: str = None
+    """
+    Text file to memorize, used by memorization code path (e.g., memorize.py)
+    """
+
+    memorize_mode: str = None
+    """
+    How to use memory:
+
+        - load (inference): read static memories from memory_load path and use them during inference
+
+        - save (inference): generate memories dynamically during inference and save to memory_save path
+
+        - train (training): generate memories dynamically and use them to train the model with memorization enabled
+
+    Possible values: "load", "save", "train"
+    """
