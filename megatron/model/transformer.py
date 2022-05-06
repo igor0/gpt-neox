@@ -276,7 +276,7 @@ class ParallelSelfAttention(nn.Module):
             self.rotary_emb = None
 
         self.attention_type = neox_args.attention_config[layer_number]
-        self.sparse = self.attention_type not in ["global", "cheat"]
+        self.sparse = self.attention_type not in ["global", "cheat", "short"]
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -467,6 +467,18 @@ class ParallelSelfAttention(nn.Module):
 
             # Update the attention mask
             attention_mask = get_attn_mask(hidden_states.size(0), hidden_states.device)
+        elif self.attention_type == "short":
+            seq_length = hidden_states.size(0)
+
+            m1 = torch.tril(
+                torch.ones((1, seq_length, seq_length), device=hidden_states.device),
+            )
+
+            m2 = torch.tril(
+                torch.ones((1, seq_length, seq_length), device=hidden_states.device),
+                diagonal=-seq_length//2,
+            )
+            attention_mask = (m1 - m2) < 0.5
 
         # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
         mixed_x_layer, _ = self.query_key_value(layer_norm(hidden_states))
@@ -640,7 +652,7 @@ class ParallelTransformerLayer(nn.Module):
             # x = x + attn(ln1(x)) + mlp(ln2(x))
             # this means we can avoid doing the allreduce in the attn / mlp outputs
             # to save communication time (we can do a single allreduce after we add mlp / attn outputs).
-            
+
             # attention_output = attn(ln1(x))
             residual = x
             attention_output, attention_bias = self.attention(
