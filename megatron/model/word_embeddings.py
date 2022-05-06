@@ -34,6 +34,7 @@ class Embedding(torch.nn.Module):
         self.hidden_size = hidden_size
         self.init_method = init_method
         self.num_tokentypes = num_tokentypes
+        self.eod_id = neox_args.tokenizer.eod_id
 
         # Word embeddings (parallel).
         self.word_embeddings = mpu.VocabParallelEmbedding(
@@ -90,6 +91,10 @@ class Embedding(torch.nn.Module):
         #
         # TODO: better understand why this is needed.
         self.dummy = nn.Parameter(torch.ones(1))
+
+
+        self.tokenizer = neox_args.tokenizer
+
     def add_tokentype_embeddings(self, num_tokentypes):
         """Add token-type embedding. This function is provided so we can add
         token-type embeddings in case the pretrained model does not have it.
@@ -147,11 +152,40 @@ class EmbeddingPipe(Embedding):
         else:
             raise ValueError(f'Incorrect number of args passed to {self.__class__.__name__}')
 
+        all_eod_markers = [
+            [
+                idx for idx, val in enumerate(tokens) if val == self.eod_id
+            ]
+            for tokens in input_ids.tolist()
+        ]
+
+        if False:
+            # This can be useful for debugging purposes.
+            print("#########################################")
+            tokens = input_ids[0].tolist()
+            for i in range(len(tokens)):
+                print(i, "'" + self.tokenizer.detokenize([tokens[i]]) + "'")
+            print("#########################################")
+
+        eod_markers = [
+            (
+                min(
+                    (idx for idx, val in enumerate(tokens) if val == self.eod_id),
+                    default=len(tokens)
+                ),
+                max(
+                    (idx for idx, val in enumerate(tokens) if val == self.eod_id),
+                    default=0
+                )
+            )
+            for tokens in input_ids.tolist()
+        ]
+
         embeddings = super().forward(input_ids, position_ids)
         if in_inference:
-            return embeddings, layer_past, attention_mask
+            return embeddings, layer_past, eod_markers, attention_mask
         else:
-            return embeddings, attention_mask
+            return embeddings, eod_markers, attention_mask
 
 class SoftEmbedding(torch.nn.Module):
 
@@ -182,6 +216,8 @@ class SoftEmbedding(torch.nn.Module):
     def forward(self, args: tuple):
         in_inference = len(args) == 3  # embeddings, layer_past, attention_mask
         in_train = len(args) == 2 # embeddings, attention_mask
+        raise BaseException("Soft prompts are not supported in this branch.")
+
         if in_train:
             embedding, attention_mask = args
         else:

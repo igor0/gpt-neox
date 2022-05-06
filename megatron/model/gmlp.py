@@ -100,6 +100,8 @@ class GMLPBlock(nn.Module):
         in_inference = len(args) == 4
         in_train = len(args) == 2
 
+        raise BaseException("GMLP blocks are not supported in this branch.")
+
         if in_train:
             x, attention_mask = args
         elif in_inference:

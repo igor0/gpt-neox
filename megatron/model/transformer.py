@@ -241,6 +241,7 @@ class ParallelSelfAttention(nn.Module):
                 mpu.get_model_parallel_rank(),
             )
 
+        self.attention_type = neox_args.attention_config[layer_number]
         # TODO: this arg shouldn't need to be passed in - get from neox_args
         if rotary:
             if neox_args.rotary_pct == 1:
@@ -261,7 +262,6 @@ class ParallelSelfAttention(nn.Module):
         else:
             self.rotary_emb = None
 
-        self.attention_type = neox_args.attention_config[layer_number]
         self.sparse = self.attention_type not in ["global", "memory"]:
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
@@ -624,7 +624,7 @@ class ParallelTransformerLayer(nn.Module):
             # attention_output = attn(ln1(x))
             residual = x
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, layer_past=layer_past
+                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
@@ -658,7 +658,7 @@ class ParallelTransformerLayer(nn.Module):
 
             # x = x + attn(ln1(x))
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, layer_past=layer_past
+                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
@@ -692,19 +692,21 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
     """Extends ParallelTransformerLayer to forward attention_mask through the pipeline. """
 
     def forward(self, args):
-        in_inference = len(args) == 4  # length of the args in inference == 4
-        in_train = len(args) == 2  # length of the args in training == 2
+        in_inference = len(args) == 5  # length of the args in inference == 5
+        in_train = len(args) == 3  # length of the args in training == 3
+
         if in_train:
-            hidden_states, attention_mask = args
+            hidden_states, eod_markers, attention_mask = args
             # we are returning just [hidden_states, mask]
-            return super().forward(hidden_states, attention_mask), attention_mask
+            return super().forward(hidden_states, attention_mask, eod_markers), eod_markers, attention_mask
         elif in_inference:
             # we are in inference
-            hidden_states, layer_past, presents, attention_mask = args
+            hidden_states, layer_past, presents, eod_markers, attention_mask = args
+
             past = torch.Tensor()
             if layer_past is not None and layer_past.numel() > 0:
                 past = layer_past[self.layer_number]
-            outputs = super().forward(hidden_states, attention_mask, layer_past=past)
+            outputs = super().forward(hidden_states, attention_mask, eod_markers, layer_past=past)
 
             if self.get_key_value:
                 # outputs = [hidden_states, present]
@@ -715,7 +717,7 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
                     presents = torch.cat((presents, present.unsqueeze(dim=0)))
             else:
                 hidden_states = outputs
-            return hidden_states, layer_past, presents, attention_mask
+            return hidden_states, layer_past, presents, eod_markers, attention_mask
         else:
             raise ValueError(
                 f"In layer {self.layer_number} - Incorrect number of arguments ({len(args)}) for {self.__class__.__name__}"
@@ -781,3 +783,4 @@ def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=Non
         return logits_parallel
 
     return mpu.gather_from_model_parallel_region(logits_parallel)
+
