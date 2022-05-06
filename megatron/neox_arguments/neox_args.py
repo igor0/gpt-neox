@@ -21,6 +21,7 @@ ATTENTION_TYPE_CHOICES = [
     "gmlp",
     "amlp",
     "cheat",
+    "memory",
 ]
 
 
