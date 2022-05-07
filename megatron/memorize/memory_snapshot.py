@@ -26,7 +26,7 @@ class _MemorySnapshot:
     def add_memories(self, *args, **kwargs):
         return
 
-    def get_memories(self, device, is_training, queries, eod_markers):
+    def get_memories(self, device, queries, eod_markers):
         """
         # queries: [sq, b, np, hn]
         """

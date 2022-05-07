@@ -102,6 +102,7 @@ class MemoryAttention(nn.Module):
             attention_softmax_in_fp32 = True
 
         self.layer_number = layer_number
+        self.gradient_accumulation_steps = neox_args.gradient_accumulation_steps
 
         # Per attention head and per partition values.
         world_size = mpu.get_model_parallel_world_size()
@@ -192,8 +193,10 @@ class MemoryAttention(nn.Module):
                 device,
                 neox_args.memory_size,
                 neox_args.memory_invalid_query_mode,
+                neox_args.gradient_accumulation_steps,
                 memory_dumper_init = memory_dumper_init)
             self.memory_snap = None
+        self.grad_accum_idx = 0
 
     def attention(
         self, query_layer, key_layer, value_layer, attention_mask,
@@ -293,7 +296,9 @@ class MemoryAttention(nn.Module):
         # hidden_states: [sq, b, h]
 
         if self.memorize_mode == "train":
-            mem_train = self.memory_train.get_partition(self.training)
+            mem_train = self.memory_train.get_partition(self.training, self.grad_accum_idx)
+
+            self.grad_accum_idx = (self.grad_accum_idx + 1) % self.gradient_accumulation_steps
         else:
             mem_train = None
 
@@ -316,7 +321,6 @@ class MemoryAttention(nn.Module):
             # Extract keys and values from memory
             mem_keys, mem_vals, mem_mask = mem_train.get_memories(
                 query.device,
-                self.training,
                 query,
                 eod_markers,
                 lambda past_hidden_states: self.hidden_to_kv(past_hidden_states, self.key_value, normalize=True)

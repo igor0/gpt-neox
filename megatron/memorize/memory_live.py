@@ -5,7 +5,7 @@ class MemoryLive:
     Represents a sliding window of memories tracked for a particular model.
     """
 
-    def __init__(self, device, memory_size, memory_invalid_query_mode, memory_dumper_init=None):
+    def __init__(self, device, memory_size, memory_invalid_query_mode, training_partitions, memory_dumper_init=None):
         """
         memory_size:
             Number of key/value pairs (per batch & attention head) to retain
@@ -32,35 +32,42 @@ class MemoryLive:
         if memory_dumper_init is None:
             memory_dumper_init = lambda training: None
 
-        self.partition = _MemoryPartition(
-            memory_size,
-            memory_invalid_query_mode,
-            memory_dumper_init(self.training),
-        )
-        self.inactive_partition = _MemoryPartition(
-            memory_size,
-            memory_invalid_query_mode,
-            memory_dumper_init(not self.training),
-        )
+        self.partitions = [
+            _MemoryPartition(
+                memory_size,
+                memory_invalid_query_mode,
+                memory_dumper_init(not self.training),
+            )
+        ] + [
+            _MemoryPartition(
+                memory_size,
+                memory_invalid_query_mode,
+                memory_dumper_init(self.training),
+            ) for _ in range(training_partitions)
+        ]
+        self.idx = -1
 
-    def get_partition(self, training):
-        if training != self.training:
-            # swap out the memory partitions (training or evaluation)
-            self.inactive_partition, self.partition = self.partition, self.inactive_partition
+    def get_partition(self, training, partition_idx):
+        idx = 0
+        if training:
+            idx = partition_idx + 1
 
-            # move the active partition to the GPU and the inactive one to the CPU
-            self.inactive_partition._move_to(torch.device('cpu'))
-            self.partition._move_to(self.device)
+        # deactivate old partition
+        if self.idx >= 0:
+            self.partitions[self.idx]._move_to(torch.device('cpu'))
 
-            # sync the inactive partition (if dumping to file)
-            self.inactive_partition._sync()
+        if self.idx == 0:
+            # Clear the evaluation memory at the end of each evaluation cycle
+            self.partitions[self.idx]._clear()
 
-            self.training = training
-            if self.training:
-                # Clear the evaluation memory at the end of each evaluation cycle
-                self.inactive_partition._clear()
+        # activate the new partition
+        self.partitions[idx]._move_to(self.device)
 
-        return self.partition
+        # update the current index
+        self.idx = idx
+
+        # return the current partition
+        return self.partitions[idx]
 
 
 class _MemoryPartition:
@@ -136,7 +143,7 @@ class _MemoryPartition:
                 self.valid_from[i] -= min(self.valid_from[i], removed_count)
                 self.first_token[i] -= removed_count
 
-    def get_memories(self, device, is_training, queries, eod_markers, kv_func):
+    def get_memories(self, device, queries, eod_markers, kv_func):
         # Mask away:
         #    - memorized keys from before EOS
         #    - queries from after EOS

@@ -25,7 +25,7 @@ class MemorizationFriendlyDataset(torch.utils.data.Dataset):
         remapped_idx =  batch * (len(self) // self.batch_size) + (idx // self.batch_size)
         return self.dataset.__getitem__(remapped_idx)
 
-def make_data_loader(dataset, neox_args):
+def make_data_loader(dataset, neox_args, trainable=False):
     """Buld dataloader given an input dataset."""
     if dataset is None:
         return None
@@ -35,8 +35,13 @@ def make_data_loader(dataset, neox_args):
     global_batch_size = neox_args.batch_size * world_size
     num_workers = neox_args.num_workers
 
+    if trainable:
+        memo_batch_size = global_batch_size * neox_args.gradient_accumulation_steps
+    else:
+        memo_batch_size = global_batch_size
+
     if neox_args.mem_friendly_batch:
-        dataset = MemorizationFriendlyDataset(dataset, global_batch_size)
+        dataset = MemorizationFriendlyDataset(dataset, memo_batch_size)
 
     # Use a simple sampler with distributed batch sampler.
     sampler = torch.utils.data.SequentialSampler(dataset)
@@ -314,7 +319,7 @@ def build_train_valid_test_data_iterators(neox_args):
             )
 
         # Build dataloders.
-        train_dataloader = make_data_loader(train_ds, neox_args=neox_args)
+        train_dataloader = make_data_loader(train_ds, neox_args=neox_args, trainable=True)
         valid_dataloader = make_data_loader(valid_ds, neox_args=neox_args)
         test_dataloader = make_data_loader(test_ds, neox_args=neox_args)
 
