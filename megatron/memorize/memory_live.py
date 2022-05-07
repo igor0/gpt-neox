@@ -136,12 +136,12 @@ class _MemoryPartition:
                 self.valid_from[i] -= min(self.valid_from[i], removed_count)
                 self.first_token[i] -= removed_count
 
-    def get_memories(self, device, is_training, queries, eod_markers, qkv_func):
+    def get_memories(self, device, is_training, queries, eod_markers, kv_func):
         # Mask away:
         #    - memorized keys from before EOS
         #    - queries from after EOS
 
-        _, keys, values = qkv_func(self.context)
+        keys, values = kv_func(self.context)
 
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(

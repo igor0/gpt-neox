@@ -1,8 +1,11 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
 
 from .norms import get_norm
+from megatron.memorize import MemoryLive, MemoryDumper
 from megatron import mpu
 from megatron.model.fused_softmax import FusedScaleMaskSoftmax
 
@@ -14,6 +17,7 @@ class ParallelMemoryModule(nn.Module):
         init_method,
         output_layer_init_method,
         layer_number,
+        mlp_class,
     ):
 
         super().__init__()
@@ -27,7 +31,7 @@ class ParallelMemoryModule(nn.Module):
         self.layernorm3 = norm(neox_args.hidden_size, eps=eps)
 
         # MLP 1
-        self.mlp1 = ParallelMLP(
+        self.mlp1 = mlp_class(
             neox_args=neox_args,
             init_method=init_method,
             output_layer_init_method=output_layer_init_method,
@@ -45,7 +49,7 @@ class ParallelMemoryModule(nn.Module):
         )
 
         # MLP 2
-        self.mlp2 = ParallelMLP(
+        self.mlp2 = mlp_class(
             neox_args=neox_args,
             init_method=init_method,
             output_layer_init_method=output_layer_init_method,
@@ -56,7 +60,7 @@ class ParallelMemoryModule(nn.Module):
         if neox_args.hidden_dropout != 0:
             raise ValueError(f'ParallelMemoryModule does not support hidden_dropout (hidden_dropout={neox_args.hidden_dropout})')
 
-    def forward(self, x):
+    def forward(self, x, eod_markers):
         # pseudocode:
         #
         # x = mlp(ln1(x))
@@ -68,8 +72,9 @@ class ParallelMemoryModule(nn.Module):
         x = mlp1_output + mlp1_bias.expand_as(mlp1_output)
 
         # x = x + attn(ln2(x))
-        attention_output, attention_bias = self.attn(self.layernorm2(x))
-        x = x + attention_output + attention_bias.expand_as(residual)
+        attention_output, attention_bias = self.attn(self.layernorm2(x), eod_markers)
+        if attention_output is not None:
+            x = x + attention_output + attention_bias.expand_as(attention_output)
 
         # x = x + mlp2(ln3(x))
         mlp2_output, mlp2_bias = self.mlp2(self.layernorm3(x))
@@ -89,14 +94,15 @@ class MemoryAttention(nn.Module):
     ):
         super().__init__()
 
-        self.fp16 = neox_args.precision == "fp16"
-        self.bf16 = neox_args.precision == "bfloat16"
-        self.attention_mask_func = attention_mask_func
-        self.apply_query_key_layer_scaling = neox_args.apply_query_key_layer_scaling
-        self.attention_softmax_in_fp32 = neox_args.attention_softmax_in_fp32
-        if self.apply_query_key_layer_scaling:
-            self.attention_softmax_in_fp32 = True
+        fp16 = neox_args.precision == "fp16"
+        bf16 = neox_args.precision == "bfloat16"
+        apply_query_key_layer_scaling = neox_args.apply_query_key_layer_scaling
+        attention_softmax_in_fp32 = neox_args.attention_softmax_in_fp32
+        if apply_query_key_layer_scaling:
+            attention_softmax_in_fp32 = True
+
         self.layer_number = layer_number
+
         # Per attention head and per partition values.
         world_size = mpu.get_model_parallel_world_size()
         self.hidden_size_per_partition = mpu.divide(neox_args.hidden_size, world_size)
@@ -106,7 +112,7 @@ class MemoryAttention(nn.Module):
         self.num_attention_heads_per_partition = mpu.divide(
             neox_args.num_attention_heads, world_size
         )
-        self.pos_emb = neox_args.pos_emb
+
         self.memorize_mode = neox_args.memorize_mode
 
         # Strided linear layer.
@@ -121,16 +127,26 @@ class MemoryAttention(nn.Module):
         self.key_value = mpu.ColumnParallelLinear(
             neox_args=neox_args,
             input_size=neox_args.hidden_size,
-            output_size=3 * neox_args.hidden_size,
+            output_size=2 * neox_args.hidden_size,
             gather_output=False,
             init_method=init_method,
         )
 
         coeff = None
         self.norm_factor = math.sqrt(self.hidden_size_per_attention_head)
-        if self.apply_query_key_layer_scaling:
+        if apply_query_key_layer_scaling:
             coeff = max(1, self.layer_number)
             self.norm_factor *= coeff
+
+        self.scale_mask_softmax = FusedScaleMaskSoftmax(
+            input_in_fp16=fp16,
+            input_in_bf16=bf16,
+            upper_triang_mask_fusion=neox_args.scaled_upper_triang_masked_softmax_fusion,
+            general_mask_fusion=neox_args.scaled_masked_softmax_fusion,
+            mask_func=attention_mask_func,
+            softmax_in_fp32=attention_softmax_in_fp32,
+            scale=coeff,
+        )
 
         # Output.
         self.dense = mpu.RowParallelLinear(
@@ -147,7 +163,7 @@ class MemoryAttention(nn.Module):
         device = torch.cuda.current_device()
 
         if self.memorize_mode == "save":
-            Path(neox_args.memory_save).mkdir(exist_ok = True, parents = True)
+            Path(neox_args.memory_save).mkdir(exist_ok=True, parents=True)
             def init_dumper(training):
                 if training:
                     # When memory_save is set, we should only dump during eval, not during
@@ -155,7 +171,7 @@ class MemoryAttention(nn.Module):
                     return None
 
                 mem_file = get_mem_dump_path(neox_args.memory_save, layer_number)
-                return memorize.MemoryDumper(
+                return MemoryDumper(
                     layer_number = layer_number,
                     file_path = mem_file,
                     dim = self.hidden_size_per_attention_head,
@@ -172,7 +188,7 @@ class MemoryAttention(nn.Module):
             self.memory_train = None
         else:
             # Maintain a sliding window of memories
-            self.memory_train = memorize.MemoryLive(
+            self.memory_train = MemoryLive(
                 device,
                 neox_args.memory_size,
                 neox_args.memory_invalid_query_mode,
@@ -269,8 +285,8 @@ class MemoryAttention(nn.Module):
             mixed_x_layer, 2
         )
         if normalize:
-            key_layer = l2norm(key_layer)
-            value_layer = l2norm(value_layer)
+            key_layer = F.normalize(key_layer, dim = -1)
+            value_layer = F.normalize(value_layer, dim = -1)
         return key_layer, value_layer
 
     def forward(self, hidden_states, eod_markers):
@@ -278,29 +294,32 @@ class MemoryAttention(nn.Module):
 
         if self.memorize_mode == "train":
             mem_train = self.memory_train.get_partition(self.training)
-
-            if self.attention_type != "knn_both":
-                raise ValueError("Not supported.")
         else:
             mem_train = None
-
-        sz_queries = query_layer.size(0)
-        sz_keys = key_layer.size(0)
 
         if mem_train is None or mem_train.is_empty():
             output, bias = None, None
         else:
             # [sq, b, h] --> [sq, b, np * hn]
             query, _ = self.query(hidden_states)
-            query = l2norm(query)
+
+            # [sq, b, np * hn] -> [sq, b, np, hn]
+            query = query.view((
+                query.size(0),
+                query.size(1),
+                self.num_attention_heads_per_partition,
+                self.hidden_size_per_attention_head,
+            ))
+
+            query = F.normalize(query, dim = -1)
 
             # Extract keys and values from memory
             mem_keys, mem_vals, mem_mask = mem_train.get_memories(
-                key_layer.device,
+                query.device,
                 self.training,
                 query,
                 eod_markers,
-                lambda past_hidden_states: self.hidden_to_kv(past_hidden_states, normalize=True)
+                lambda past_hidden_states: self.hidden_to_kv(past_hidden_states, self.key_value, normalize=True)
             )
 
             context_layer = self.attention(

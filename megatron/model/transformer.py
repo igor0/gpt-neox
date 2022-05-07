@@ -262,7 +262,7 @@ class ParallelSelfAttention(nn.Module):
         else:
             self.rotary_emb = None
 
-        self.sparse = self.attention_type not in ["global", "memory"]:
+        self.sparse = self.attention_type not in ["global", "memory"]
         if self.sparse:
             self.sparse_attn = configure_sparse_attention(
                 neox_args,
@@ -581,14 +581,17 @@ class ParallelTransformerLayer(nn.Module):
             parallel_output=self.gpt_j_residual,
         )
 
-        if neox_args.attention_config["layer_number"] == "memory":
+        if neox_args.attention_config[layer_number] == "memory":
             self.memory_module = ParallelMemoryModule(
                 neox_args=neox_args,
                 attention_mask_func=attention_mask_func,
                 init_method=init_method,
                 output_layer_init_method=output_layer_init_method,
                 layer_number=layer_number,
+                mlp_class=ParallelMLP,
             )
+        else:
+            self.memory_module = None
 
     def _get_bias_dropout(self):
         if self.bias_dropout_fusion:
@@ -603,15 +606,8 @@ class ParallelTransformerLayer(nn.Module):
 
     def forward(self, x, attention_mask, eod_markers, layer_past=None):
         if self.memory_module is not None:
-            mem_output, mem_bias = self.memory_module(x)
-            if mem_output is not None:
-                # x = x + memory_module(x)
-                x = bias_dropout_fn(
-                    mem_output,
-                    bias=mem_bias.expand_as(mem_output),
-                    residual=x,
-                    prob=self.hidden_dropout,
-                )
+            mem_output = self.memory_module(x, eod_markers)
+            x = x + mem_output
 
         bias_dropout_fn = self._get_bias_dropout()
         # x: [b, s, h]
@@ -624,7 +620,7 @@ class ParallelTransformerLayer(nn.Module):
             # attention_output = attn(ln1(x))
             residual = x
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
+                self.input_layernorm(x), attention_mask, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
@@ -658,7 +654,7 @@ class ParallelTransformerLayer(nn.Module):
 
             # x = x + attn(ln1(x))
             attention_output, attention_bias = self.attention(
-                self.input_layernorm(x), attention_mask, eod_markers, layer_past=layer_past
+                self.input_layernorm(x), attention_mask, layer_past=layer_past
             )
             if self.get_key_value:
                 attention_output, presents = attention_output
