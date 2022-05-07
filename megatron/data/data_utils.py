@@ -36,7 +36,8 @@ def make_data_loader(dataset, neox_args, trainable=False):
     num_workers = neox_args.num_workers
 
     if trainable:
-        memo_batch_size = global_batch_size * neox_args.gradient_accumulation_steps
+        factor = 24
+        memo_batch_size = global_batch_size * neox_args.gradient_accumulation_steps * factor
     else:
         memo_batch_size = global_batch_size
 

@@ -52,19 +52,21 @@ class MemoryLive:
         if training:
             idx = partition_idx + 1
 
-        # deactivate old partition
-        if self.idx >= 0:
-            self.partitions[self.idx]._move_to(torch.device('cpu'))
+        # Swap out partitions if necessary
+        if idx != self.idx:
+            # deactivate old partition
+            if self.idx >= 0:
+                self.partitions[self.idx]._move_to(torch.device('cpu'))
 
-        if self.idx == 0:
-            # Clear the evaluation memory at the end of each evaluation cycle
-            self.partitions[self.idx]._clear()
+            if self.idx == 0:
+                # Clear the evaluation memory at the end of each evaluation cycle
+                self.partitions[self.idx]._clear()
 
-        # activate the new partition
-        self.partitions[idx]._move_to(self.device)
+            # activate the new partition
+            self.partitions[idx]._move_to(self.device)
 
-        # update the current index
-        self.idx = idx
+            # update the current index
+            self.idx = idx
 
         # return the current partition
         return self.partitions[idx]

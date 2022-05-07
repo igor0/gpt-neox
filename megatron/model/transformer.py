@@ -210,6 +210,8 @@ class ParallelSelfAttention(nn.Module):
         self.apply_query_key_layer_scaling = neox_args.apply_query_key_layer_scaling
         self.get_key_value = get_key_value
         self.attention_softmax_in_fp32 = neox_args.attention_softmax_in_fp32
+        self.partition_count = neox_args.gradient_accumulation_steps * 24 # HACK
+
         if self.apply_query_key_layer_scaling:
             self.attention_softmax_in_fp32 = True
         self.layer_number = layer_number
@@ -362,8 +364,10 @@ class ParallelSelfAttention(nn.Module):
                     device,
                     neox_args.memory_size,
                     neox_args.memory_invalid_query_mode,
+                    self.partition_count,
                     memory_dumper_init = memory_dumper_init)
                 self.memory_snap = None
+            self.partition_idx = 0
 
 
             # sigmoid function
@@ -520,7 +524,10 @@ class ParallelSelfAttention(nn.Module):
         (query_layer, key_layer, value_layer) = self.hidden_to_qkv(hidden_states, self.query_key_value)
 
         if self.is_knn() and self.memorize_mode == "train":
-            mem_train = self.memory_train.get_partition(self.training)
+            print("XXX", "GET_PARTITION", self.training, self.partition_idx)
+            mem_train = self.memory_train.get_partition(self.training, self.partition_idx)
+            if self.training:
+                self.partition_idx = (self.partition_idx + 1) % self.partition_count
 
             if self.attention_type != "knn_both":
                 raise ValueError("Not supported.")
@@ -613,7 +620,6 @@ class ParallelSelfAttention(nn.Module):
                 # Extract keys and values from memory
                 mem_keys, mem_vals, mem_mask = mem_train.get_memories(
                     key_layer.device,
-                    self.training,
                     mem_query,
                     eod_markers,
                     lambda past_hidden_states: self.hidden_to_qkv(past_hidden_states, self.query_key_value_mem, normalize=use_cosine_sim)
