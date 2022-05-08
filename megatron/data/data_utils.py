@@ -40,7 +40,10 @@ def make_data_loader(dataset, neox_args, trainable=False):
     else:
         memo_batch_size = global_batch_size
 
-    if neox_args.mem_friendly_batch:
+    print("mem_friendly?", neox_args.mem_friendly_batch, "trainable?", trainable, "memo_batch_size", memo_batch_size)
+    # DEBUG HACK: validation should use a MemorizationFriendlyDataset, so that we can compare
+    # directly.
+    if neox_args.mem_friendly_batch or not trainable:
         dataset = MemorizationFriendlyDataset(dataset, memo_batch_size)
 
     # Use a simple sampler with distributed batch sampler.
@@ -117,7 +120,7 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                   documents, indexed_dataset,
                                   train_valid_test_num_samples[index],
                                   seq_length, seed, build_index_mappings=True,
-                                  shuffle=shuffle)
+                                  shuffle=(shuffle and name != "valid")) # DEBUG HACK
         return dataset
 
     train_dataset = build_dataset(0, 'train')
