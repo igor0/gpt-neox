@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 class MemoryLive:
@@ -5,7 +6,7 @@ class MemoryLive:
     Represents a sliding window of memories tracked for a particular model.
     """
 
-    def __init__(self, device, memory_size, memory_invalid_query_mode, training_partitions, memory_dumper_init=None):
+    def __init__(self, device, memory_size, device_batch_size, hidden_size, memory_invalid_query_mode, training_partitions):
         """
         memory_size:
             Number of key/value pairs (per batch & attention head) to retain
@@ -13,7 +14,7 @@ class MemoryLive:
         memory_invalid_query_mode:
             How to populate the memory attention mask for queries that are past an EOD token in the
             current context and thus shouldn't have access to memories:
-            
+
                 * "first_token" attends to the latest token that was a first token in some context.
                   Due to causal attention, the first token in a context carries the least meaning.
                   Also, likely for related reasons, inactive attention heads are known to park
@@ -21,28 +22,24 @@ class MemoryLive:
                   well.
 
                 * "all_tokens" attends to all tokens in memory uniformly
-
-        memory_dumper:
-            Optional MemoryDumper to persist any added memories.
         """
         self.device = device
 
         self.training = True
 
-        if memory_dumper_init is None:
-            memory_dumper_init = lambda training: None
-
         self.partitions = [
             _MemoryPartition(
                 memory_size,
+                device_batch_size,
+                hidden_size,
                 memory_invalid_query_mode,
-                memory_dumper_init(not self.training),
             )
         ] + [
             _MemoryPartition(
                 memory_size,
+                device_batch_size,
+                hidden_size,
                 memory_invalid_query_mode,
-                memory_dumper_init(self.training),
             ) for _ in range(training_partitions)
         ]
         self.idx = -1
@@ -54,16 +51,9 @@ class MemoryLive:
 
         # Swap out partitions if necessary
         if idx != self.idx:
-            # deactivate old partition
-            if self.idx >= 0:
-                self.partitions[self.idx]._move_to(torch.device('cpu'))
-
             if self.idx == 0:
                 # Clear the evaluation memory at the end of each evaluation cycle
                 self.partitions[self.idx]._clear()
-
-            # activate the new partition
-            self.partitions[idx]._move_to(self.device)
 
             # update the current index
             self.idx = idx
@@ -71,6 +61,55 @@ class MemoryLive:
         # return the current partition
         return self.partitions[idx]
 
+class _MemoryBuffer:
+    def __init__(self, memory_size, device_batch_size, hidden_size):
+        self.memory_size = memory_size
+        self.device_batch_size = device_batch_size
+        self.hidden_size = hidden_size
+
+        self.memory = np.zeros(
+            (memory_size, device_batch_size, hidden_size),
+            dtype=np.float16,
+        )
+        self.clear()
+
+    def clear(self):
+        self.head = 0
+        self.count = 0
+
+    def add(self, new_memories):
+        tail = (self.head + self.count) % self.memories.size(0)
+        add_end = tail + new_memories.size(0)
+        if add_end <= self.memories.size(0):
+            self.memories[tail:add_end,:,:] = new_memories
+        else:
+            chunk1_size = self.memories.size(0) - tail
+            chunk2_size = new_memories.size(0) - chunk1_size
+            self.memories[tail:,:,:] = new_memories[:chunk1_size,:,:]
+            self.memories[:chunk2_size:,:] = new_memories[chunk1_size:,:,:]
+
+        self.count += new_memories.size(0)
+
+        if self.count > self.memories.size():
+            removed_count = self.count - self.memories.size(0)
+            self.count -= removed_count
+            self.head = (self.head + removed_count) % self.memories.size(0)
+        else:
+            removed_count = 0
+
+        return removed_count
+
+    def get(self, device):
+        tail_no_wrap = self.head + self.count
+        if tail_no_wrap <= self.memories.size(0):
+            return self.memories[self.head:tail_no_wrap,:,:]
+
+        chunk1 = self.memories[self.head:,:,:]
+        chunk2 = self.memories[:tail_no_wrap - self.memories.size(0),:,:]
+        return torch.cat((
+            torch.from_numpy(chunk1).to(device),
+            torch.from_numpy(chunk2).to(device)
+        ), dim=0)
 
 class _MemoryPartition:
     """
@@ -78,54 +117,32 @@ class _MemoryPartition:
     for training and one for evaluation.
     """
 
-    def __init__(self, memory_size, memory_invalid_query_mode, memory_dumper=None):
-        self.memory_size = memory_size
+    def __init__(self, memory_size, device_batch_size, hidden_size, memory_invalid_query_mode):
+        self.buffer = _MemoryBuffer(memory_size, device_batch_size, hidden_size)
         self.memory_invalid_query_mode = memory_invalid_query_mode
-        self.memory_dumper = memory_dumper
+
+        self.valid_from = [0] * device_batch_size
+        self.first_token = [0] * device_batch_size
+
         self._clear()
 
-    def _move_to(self, device):
-        if self.context is not None:
-            self.context = self.context.to(device)
-
     def _clear(self):
-        self.context = None
-        self.first_token = None
-        self.pos_offset = 0
+        self.buffer.clear()
 
-    def _sync(self):
-        if self.memory_dumper is not None:
-            self.memory_dumper.sync()
+        for i in range(len(self.valid_from)):
+            valid_from[i] = 0
+            first_token[i] = 0
 
-    def add_memories(self, context, eod_markers):
+    def add_memories(self, new_memories, eod_markers):
         """
-            context: [sq, b, h]
+            new_memories: [sq, b, h]
             eod_markers
         """
 
-        # adjust the offset to apply to the positional embedding
-
-        self.pos_offset += context.shape[0] * context.shape[1]
-
-        # save the memories to the file, if requested
-
-        #if self.memory_dumper is not None:
-        #    self.memory_dumper.dump([
-        #        keys.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
-        #        values.view(keys.shape[0] * keys.shape[1], keys.shape[2], keys.shape[3]).cpu(),
-        #    ])
-
         # record the memories
-
-        if self.context is None:
-            self.context = context
-            self.valid_from = [0] * len(eod_markers)
-            self.first_token = [0] * len(eod_markers)
-        else:
-            self.context = torch.cat((self.context, context), dim=0)
+        removed_count = self.buffer.add(new_memories)
 
         # invalidate any memories before the newest EOD token
-
         for i in range(len(eod_markers)):
             # update the "first token"
             self.first_token[i] = self.context.shape[0] - context.shape[0]
@@ -136,21 +153,19 @@ class _MemoryPartition:
 
         # drop some memories if we already have too much
 
-        if self.context.shape[0] > self.memory_size:
-            # shift the window forward
-            removed_count = self.context.shape[0] - self.memory_size
-            self.context = self.context[removed_count:]
-
+        if removed_count > 0:
+            # the window shifted forward
             for i in range(len(eod_markers)):
                 self.valid_from[i] -= min(self.valid_from[i], removed_count)
                 self.first_token[i] -= removed_count
 
     def get_memories(self, device, queries, eod_markers, qkv_func):
+        # Get the keys and values
+        _, keys, values = qkv_func(self.buffer.get(device))
+
         # Mask away:
         #    - memorized keys from before EOS
         #    - queries from after EOS
-
-        _, keys, values = qkv_func(self.context)
 
         # memory_mask: [b, head (broadcast), sq, sk]
         memory_mask = torch.full(
@@ -174,6 +189,3 @@ class _MemoryPartition:
 
     def is_empty(self):
         return self.context is None
-
-    def get_pos_offset(self):
-        return self.pos_offset

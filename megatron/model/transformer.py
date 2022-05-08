@@ -363,9 +363,10 @@ class ParallelSelfAttention(nn.Module):
                 self.memory_train = memorize.MemoryLive(
                     device,
                     neox_args.memory_size,
+                    neox_args.train_micro_batch_size_per_gpu,
+                    neox_args.hidden_size,
                     neox_args.memory_invalid_query_mode,
-                    self.partition_count,
-                    memory_dumper_init = memory_dumper_init)
+                    self.partition_count)
                 self.memory_snap = None
             self.partition_idx = 0
 
@@ -761,7 +762,7 @@ class ParallelTransformerLayer(nn.Module):
             # x = x + attn(ln1(x)) + mlp(ln2(x))
             # this means we can avoid doing the allreduce in the attn / mlp outputs
             # to save communication time (we can do a single allreduce after we add mlp / attn outputs).
-            
+
             # attention_output = attn(ln1(x))
             residual = x
             attention_output, attention_bias = self.attention(
