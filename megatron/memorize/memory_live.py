@@ -67,49 +67,55 @@ class _MemoryBuffer:
         self.device_batch_size = device_batch_size
         self.hidden_size = hidden_size
 
-        self.memory = np.zeros(
+        self.memories = np.zeros(
             (memory_size, device_batch_size, hidden_size),
             dtype=np.float16,
         )
         self.clear()
 
     def clear(self):
-        self.head = 0
-        self.count = 0
+        self._head = 0
+        self._count = 0
 
     def add(self, new_memories):
-        tail = (self.head + self.count) % self.memories.size(0)
-        add_end = tail + new_memories.size(0)
-        if add_end <= self.memories.size(0):
+        new_memories = new_memories.cpu()
+
+        tail = (self._head + self._count) % self.memories.shape[0]
+        add_end = tail + new_memories.shape[0]
+        if add_end <= self.memories.shape[0]:
             self.memories[tail:add_end,:,:] = new_memories
         else:
-            chunk1_size = self.memories.size(0) - tail
-            chunk2_size = new_memories.size(0) - chunk1_size
+            chunk1_size = self.memories.shape[0] - tail
+            chunk2_size = new_memories.shape[0] - chunk1_size
             self.memories[tail:,:,:] = new_memories[:chunk1_size,:,:]
             self.memories[:chunk2_size:,:] = new_memories[chunk1_size:,:,:]
 
-        self.count += new_memories.size(0)
+        self._count += new_memories.shape[0]
 
-        if self.count > self.memories.size():
-            removed_count = self.count - self.memories.size(0)
-            self.count -= removed_count
-            self.head = (self.head + removed_count) % self.memories.size(0)
+        if self._count > self.memories.shape[0]:
+            removed_count = self._count - self.memories.shape[0]
+            self._count -= removed_count
+            self._head = (self._head + removed_count) % self.memories.shape[0]
         else:
             removed_count = 0
 
         return removed_count
 
     def get(self, device):
-        tail_no_wrap = self.head + self.count
-        if tail_no_wrap <= self.memories.size(0):
-            return self.memories[self.head:tail_no_wrap,:,:]
+        tail_no_wrap = self._head + self._count
+        if tail_no_wrap <= self.memories.shape[0]:
+            chunk = self.memories[self._head:tail_no_wrap,:,:]
+            return torch.from_numpy(chunk).to(device)
 
-        chunk1 = self.memories[self.head:,:,:]
-        chunk2 = self.memories[:tail_no_wrap - self.memories.size(0),:,:]
+        chunk1 = self.memories[self._head:,:,:]
+        chunk2 = self.memories[:tail_no_wrap - self.memories.shape[0],:,:]
         return torch.cat((
             torch.from_numpy(chunk1).to(device),
             torch.from_numpy(chunk2).to(device)
         ), dim=0)
+
+    def count(self):
+        return self._count
 
 class _MemoryPartition:
     """
@@ -130,8 +136,8 @@ class _MemoryPartition:
         self.buffer.clear()
 
         for i in range(len(self.valid_from)):
-            valid_from[i] = 0
-            first_token[i] = 0
+            self.valid_from[i] = 0
+            self.first_token[i] = 0
 
     def add_memories(self, new_memories, eod_markers):
         """
@@ -145,11 +151,11 @@ class _MemoryPartition:
         # invalidate any memories before the newest EOD token
         for i in range(len(eod_markers)):
             # update the "first token"
-            self.first_token[i] = self.context.shape[0] - context.shape[0]
+            self.first_token[i] = self.buffer.count() - new_memories.shape[0]
 
             # if there are any EOD markers, invalidate the memories up to (but excluding) the last marker
             if eod_markers[i][0] <= eod_markers[i][1]:
-                self.valid_from[i] = self.context.shape[0] - context.shape[0] + eod_markers[i][1]
+                self.valid_from[i] = self.first_token[i] + eod_markers[i][1]
 
         # drop some memories if we already have too much
 
@@ -188,4 +194,4 @@ class _MemoryPartition:
         return keys, values, memory_mask
 
     def is_empty(self):
-        return self.context is None
+        return self.buffer.count() == 0
