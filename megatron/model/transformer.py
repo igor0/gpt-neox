@@ -204,13 +204,14 @@ class ParallelSelfAttention(nn.Module):
     ):
         super().__init__()
 
+        memory_partition_count = 24
         self.fp16 = neox_args.precision == "fp16"
         self.bf16 = neox_args.precision == "bfloat16"
         self.attention_mask_func = attention_mask_func
         self.apply_query_key_layer_scaling = neox_args.apply_query_key_layer_scaling
         self.get_key_value = get_key_value
         self.attention_softmax_in_fp32 = neox_args.attention_softmax_in_fp32
-        self.partition_count = neox_args.gradient_accumulation_steps * 24 # HACK
+        self.partition_count = memory_partition_count
 
         if self.apply_query_key_layer_scaling:
             self.attention_softmax_in_fp32 = True
@@ -525,7 +526,6 @@ class ParallelSelfAttention(nn.Module):
         (query_layer, key_layer, value_layer) = self.hidden_to_qkv(hidden_states, self.query_key_value)
 
         if self.is_knn() and self.memorize_mode == "train":
-            print("XXX", "GET_PARTITION", self.training, self.partition_idx)
             mem_train = self.memory_train.get_partition(self.training, self.partition_idx)
             if self.training:
                 self.partition_idx = (self.partition_idx + 1) % self.partition_count

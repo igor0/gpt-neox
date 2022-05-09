@@ -36,13 +36,12 @@ def make_data_loader(dataset, neox_args, trainable=False):
     num_workers = neox_args.num_workers
 
     if trainable:
-        factor = 24
-        memo_batch_size = global_batch_size * neox_args.gradient_accumulation_steps * factor
+        memory_partition_count = 24
     else:
-        memo_batch_size = global_batch_size
+        memory_partition_count = global_batch_size
 
     if neox_args.mem_friendly_batch:
-        dataset = MemorizationFriendlyDataset(dataset, memo_batch_size)
+        dataset = MemorizationFriendlyDataset(dataset, memory_partition_count)
 
     # Use a simple sampler with distributed batch sampler.
     sampler = torch.utils.data.SequentialSampler(dataset)
