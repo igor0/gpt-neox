@@ -46,7 +46,7 @@ def check_checkpoint_args(neox_args, checkpoint_args):
         error_message = "{} value from checkpoint ({}) is not equal to the currently set argument value ({}).".format(
             checkpoint_arg_name, checkpoint_arg_value, args_value
         )
-        assert checkpoint_arg_value == args_value, error_message
+        #assert checkpoint_arg_value == args_value, error_message
 
 
 def do_forward_pass(neox_args, model, inference=False):

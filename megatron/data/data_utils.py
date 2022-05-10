@@ -36,7 +36,7 @@ def make_data_loader(dataset, neox_args, trainable=False):
     num_workers = neox_args.num_workers
 
     if trainable:
-        memory_partition_count = 24
+        memory_partition_count = global_batch_size * 24
     else:
         memory_partition_count = global_batch_size
 
